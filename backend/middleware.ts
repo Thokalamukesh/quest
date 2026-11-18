@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 
 function allowedOrigin(origin: string | null): origin is string {
   if (!origin) return false;
-  const configuredOrigin = process.env.FLUTTER_WEB_ORIGIN?.replace(/\/+$/, "");
-  if (configuredOrigin && origin === configuredOrigin) return true;
+  const configuredOrigins = (process.env.FLUTTER_WEB_ORIGIN ?? "")
+    .split(",")
+    .map((item) => item.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+  if (configuredOrigins.includes(origin)) return true;
+
+  // Allow Vercel preview and production deployments for the Flutter web frontend.
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) return true;
 
   // Flutter's local Chrome debug port changes unless --web-port is specified.
-  return (
-    process.env.NODE_ENV !== "production" &&
-    /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
-  );
+  return /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
 }
 
 function addCorsHeaders(response: NextResponse, origin: string) {

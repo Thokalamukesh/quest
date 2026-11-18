@@ -2,8 +2,8 @@
 set -e
 
 if [[ -z "${API_BASE_URL:-}" ]]; then
-	echo "Set API_BASE_URL to the deployed Next.js backend origin in Vercel." >&2
-	exit 1
+	API_BASE_URL="https://quest-backend.vercel.app"
+	echo "API_BASE_URL not set; defaulting to $API_BASE_URL"
 fi
 
 API_BASE_URL="${API_BASE_URL%/}"

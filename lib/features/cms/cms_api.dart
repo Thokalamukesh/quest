@@ -24,6 +24,9 @@ class CmsApi {
       if (Uri.base.host == 'localhost' || Uri.base.host == '127.0.0.1') {
         return 'http://localhost:3000';
       }
+      if (Uri.base.host.endsWith('.vercel.app')) {
+        return 'https://quest-backend.vercel.app';
+      }
       // Production deployments can serve the API from the same origin.
       return Uri.base.origin;
     }
