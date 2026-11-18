@@ -1,5 +1,8 @@
-
 {
+  "framework": null,
+  "installCommand": "echo Skipping Node package installation for Flutter web",
+  "buildCommand": "bash ./vercel-build.sh",
+  "outputDirectory": "build/web",
   "rewrites": [
     {
       "source": "/(.*)",
