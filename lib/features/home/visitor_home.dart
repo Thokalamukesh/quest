@@ -6,6 +6,9 @@ import 'package:video_player/video_player.dart';
 import '../cms/cms_api.dart';
 import '../cms/cms_screen.dart';
 import '../park_map/models/park_discovery_item.dart';
+import '../park_map/services/park_schedule_helper.dart';
+import '../park_map/services/saved_places_store.dart';
+import '../park_map/widgets/dining_menu_sheet.dart';
 import '../park_map/widgets/park_filter_bar.dart';
 import '../park_map/widgets/park_map_marker.dart';
 import '../park_map/widgets/park_place_detail_sheet.dart';
@@ -348,6 +351,9 @@ class _VisitorHomeState extends State<VisitorHome> {
                               videoUrl: _imageUrl(
                                 cfg['heroVideoUrl']?.toString(),
                               ),
+                              onSwitchPark: _parks.length > 1
+                                  ? () => setState(() => _park = null)
+                                  : null,
                             ),
                           ),
                           Padding(
@@ -362,7 +368,7 @@ class _VisitorHomeState extends State<VisitorHome> {
                               decoration: const BoxDecoration(
                                 color: Color(0xffeaf1f8),
                                 borderRadius: BorderRadius.vertical(
-                                  top: Radius.circular(60),
+                                  top: Radius.circular(42),
                                 ),
                                 boxShadow: [
                                   BoxShadow(
@@ -396,7 +402,8 @@ class _VisitorHomeState extends State<VisitorHome> {
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 20),
+                                  _liveHighlightsStrip(cfg),
+                                  const SizedBox(height: 18),
                                   _tileGrid(
                                     _configuredShortcuts(cfg),
                                     cfg,
@@ -439,6 +446,203 @@ class _VisitorHomeState extends State<VisitorHome> {
       ),
     );
   }
+
+  Widget _liveHighlightsStrip(Map<String, dynamic> cfg) {
+    final slug = cfg['slug']?.toString() ?? 'park';
+    final nextActivity = ParkScheduleHelper.nextActivity(cfg);
+    final shortestWait = ParkScheduleHelper.shortestWait(cfg);
+
+    return ListenableBuilder(
+      listenable: SavedPlacesStore.instance,
+      builder: (context, _) {
+        final savedCount = SavedPlacesStore.instance.savedCount(slug);
+        if (nextActivity == null && shortestWait == null && savedCount == 0) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.only(top: 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (nextActivity != null)
+                Material(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () {
+                      final shortcut = nextActivity.isWaterActivity
+                          ? HomeShortcutCatalog.byKey('wavePool')
+                          : HomeShortcutCatalog.byKey('events');
+                      if (shortcut != null) _openSection(shortcut);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: wonderlaBorder),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: nextActivity.isWaterActivity
+                                  ? const Color(0xFFE6F6FE)
+                                  : const Color(0xFFFFF4D6),
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: Icon(
+                              ParkScheduleHelper.iconFor(nextActivity),
+                              color: nextActivity.isWaterActivity
+                                  ? const Color(0xFF0284C7)
+                                  : wonderlaNavy,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 7,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: wonderlaGold,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Text(
+                                        'UP NEXT',
+                                        style: TextStyle(
+                                          color: wonderlaNavy,
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w900,
+                                          letterSpacing: 0.4,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 7),
+                                    Flexible(
+                                      child: Text(
+                                        '${nextActivity.timeLabel} · ${nextActivity.countdownLabel}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: wonderlaCobalt,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  nextActivity.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: wonderlaNavy,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            color: wonderlaMuted,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              if (shortestWait != null || savedCount > 0) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (shortestWait != null)
+                      _homeQuickPill(
+                        icon: Icons.bolt_rounded,
+                        iconColor: wonderlaSuccess,
+                        label:
+                            'Shortest wait: ${shortestWait.title} · ${shortestWait.minutes}m',
+                        onTap: () {
+                          final shortcut = HomeShortcutCatalog.byKey(
+                            'liveWaitTimes',
+                          );
+                          if (shortcut != null) _openSection(shortcut);
+                        },
+                      ),
+                    if (savedCount > 0)
+                      _homeQuickPill(
+                        icon: Icons.favorite_rounded,
+                        iconColor: wonderlaFlagRed,
+                        label: 'My Day · $savedCount saved',
+                        onTap: () => _openParkMap(cfg),
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _homeQuickPill({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required VoidCallback onTap,
+  }) => Material(
+    color: Colors.white,
+    borderRadius: BorderRadius.circular(18),
+    clipBehavior: Clip.antiAlias,
+    child: InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7.5),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: wonderlaBorder),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: iconColor),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: wonderlaNavy,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   Widget _directory() => Scaffold(
     backgroundColor: _pale,
@@ -495,6 +699,10 @@ class _VisitorHomeState extends State<VisitorHome> {
                   separatorBuilder: (_, _) => const SizedBox(height: 12),
                   itemBuilder: (context, i) {
                     final p = _parks[i];
+                    final slug = p['slug']?.toString() ?? '';
+                    final thumbUrl = slug.isEmpty
+                        ? ''
+                        : _imageUrl('/wonderla/parks/$slug.png');
                     return Card(
                       color: _white,
                       elevation: 1,
@@ -504,35 +712,83 @@ class _VisitorHomeState extends State<VisitorHome> {
                         side: const BorderSide(color: wonderlaBorder),
                       ),
                       child: InkWell(
-                        onTap: () => _loadPark(p['slug'] as String),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
+                        onTap: () => _loadPark(slug),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
                           ),
-                          leading: Container(
-                            width: 52,
-                            height: 52,
-                            decoration: BoxDecoration(
-                              color: wonderlaWhite,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
-                              Icons.park_outlined,
-                              color: _navy,
-                            ),
-                          ),
-                          title: Text(
-                            p['name']?.toString() ?? '',
-                            style: const TextStyle(
-                              color: _navy,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          subtitle: Text(p['location']?.toString() ?? ''),
-                          trailing: const Icon(
-                            Icons.chevron_right,
-                            color: _navy,
+                          child: Row(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(15),
+                                child: SizedBox(
+                                  width: 60,
+                                  height: 60,
+                                  child: thumbUrl.isNotEmpty
+                                      ? Image.network(
+                                          thumbUrl,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, _, _) =>
+                                              _parkThumbFallback(),
+                                        )
+                                      : _parkThumbFallback(),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      p['name']?.toString() ?? '',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: _navy,
+                                        fontSize: 16.5,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.location_on_outlined,
+                                          size: 14,
+                                          color: wonderlaCobalt,
+                                        ),
+                                        const SizedBox(width: 3),
+                                        Expanded(
+                                          child: Text(
+                                            p['location']?.toString() ?? '',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: wonderlaMuted,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                width: 34,
+                                height: 34,
+                                decoration: BoxDecoration(
+                                  color: wonderlaCream,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.chevron_right_rounded,
+                                  color: wonderlaNavy,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -603,6 +859,18 @@ class _VisitorHomeState extends State<VisitorHome> {
       ),
     ),
   );
+
+  Widget _parkThumbFallback() => Container(
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [wonderlaNavy, wonderlaCobalt],
+      ),
+    ),
+    alignment: Alignment.center,
+    child: const Icon(Icons.attractions_rounded, color: wonderlaGold, size: 28),
+  );
 }
 
 class _HeroCard extends StatelessWidget {
@@ -611,8 +879,11 @@ class _HeroCard extends StatelessWidget {
     required this.location,
     required this.imageUrl,
     required this.videoUrl,
+    this.onSwitchPark,
   });
   final String name, location, imageUrl, videoUrl;
+  final VoidCallback? onSwitchPark;
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -636,6 +907,15 @@ class _HeroCard extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [wonderlaNavy, wonderlaCobalt],
+                ),
+              ),
+            ),
             if (imageUrl.isNotEmpty)
               Image.network(
                 imageUrl,
@@ -649,9 +929,9 @@ class _HeroCard extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Color(0x99071a3d),
-                    Color(0x16071a3d),
-                    Color(0xb8071a3d),
+                    Color(0xA6071a3d),
+                    Color(0x28071a3d),
+                    Color(0xCC071a3d),
                   ],
                 ),
               ),
@@ -659,54 +939,103 @@ class _HeroCard extends StatelessWidget {
             Positioned(
               left: compact ? 20 : 30,
               right: compact ? 20 : 30,
-              top: compact ? 22 : 30,
-              child: Column(
+              top: compact ? 20 : 28,
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white,
-                      height: 1.1,
-                      fontSize: compact ? 25 : 31,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -.5,
-                    ),
-                  ),
-                  if (location.isNotEmpty) ...[
-                    const SizedBox(height: 7),
-                    Row(
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(
-                          Icons.location_on_rounded,
-                          color: wonderlaGold,
-                          size: 16,
-                        ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            location,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: wonderlaWhite,
-                              fontSize: compact ? 13 : 15,
-                              fontWeight: FontWeight.w600,
-                            ),
+                        Text(
+                          name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            height: 1.1,
+                            fontSize: compact ? 25 : 31,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -.5,
                           ),
                         ),
+                        if (location.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.location_on_rounded,
+                                color: wonderlaGold,
+                                size: 15.5,
+                              ),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  location,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: .92),
+                                    fontSize: compact ? 13 : 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
+                    ),
+                  ),
+                  if (onSwitchPark != null) ...[
+                    const SizedBox(width: 10),
+                    Material(
+                      color: Colors.white.withValues(alpha: .18),
+                      borderRadius: BorderRadius.circular(20),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: onSwitchPark,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: .32),
+                            ),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.swap_horiz_rounded,
+                                color: wonderlaGold,
+                                size: 16,
+                              ),
+                              SizedBox(width: 5),
+                              Text(
+                                'Parks',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ],
               ),
             ),
             Positioned(
-              left: compact ? 10 : 24,
-              right: compact ? 10 : 24,
-              bottom: compact ? 78 : 82,
+              left: compact ? 20 : 30,
+              right: compact ? 20 : 30,
+              bottom: compact ? 74 : 78,
               child: _HeroSlogan(compact: compact),
             ),
           ],
@@ -788,53 +1117,46 @@ class _HeroSlogan extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const slogan = "INDIA'S LARGEST\nAMUSEMENT PARK CHAIN!";
-    final size = compact ? 19.0 : 31.0;
-    final base = TextStyle(
-      fontSize: size,
-      height: .98,
-      fontWeight: FontWeight.w900,
-      letterSpacing: compact ? .1 : .6,
-      fontFamily: 'Arial',
-    );
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Text(
-            slogan,
-            textAlign: TextAlign.center,
-            style: base.copyWith(
-              foreground: Paint()
-                ..style = PaintingStyle.stroke
-                ..strokeWidth = compact ? 1.4 : 2.1
-                ..color = const Color(0xffffdf00),
-              shadows: const [
-                Shadow(
-                  color: Colors.black87,
-                  blurRadius: 6,
-                  offset: Offset(1, 3),
-                ),
-              ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
+          decoration: BoxDecoration(
+            color: wonderlaGold,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33071a3d),
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: const Text(
+            "INDIA'S LARGEST AMUSEMENT PARK CHAIN",
+            style: TextStyle(
+              color: wonderlaNavy,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.7,
             ),
           ),
-          Text(
-            slogan,
-            textAlign: TextAlign.center,
-            style: base.copyWith(
-              color: const Color(0xffd8aa00),
-              shadows: const [
-                Shadow(
-                  color: Color(0x99000000),
-                  blurRadius: 3,
-                  offset: Offset(1, 2),
-                ),
-              ],
-            ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Your interactive guide to rides, wait times & dining',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: .94),
+            fontSize: compact ? 13.5 : 15.5,
+            fontWeight: FontWeight.w600,
+            height: 1.3,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

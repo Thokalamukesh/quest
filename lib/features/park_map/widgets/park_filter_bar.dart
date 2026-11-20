@@ -187,6 +187,9 @@ class ParkCategoryFilterBar extends StatelessWidget {
     required this.hasAnyActiveFilter,
     required this.onClearAll,
     this.totalCount,
+    this.savedOnly = false,
+    this.savedCount = 0,
+    this.onToggleSavedOnly,
     this.padding = const EdgeInsets.symmetric(horizontal: 12),
   });
 
@@ -198,12 +201,15 @@ class ParkCategoryFilterBar extends StatelessWidget {
   final bool hasAnyActiveFilter;
   final VoidCallback onClearAll;
   final int? totalCount;
+  final bool savedOnly;
+  final int savedCount;
+  final VoidCallback? onToggleSavedOnly;
   final EdgeInsetsGeometry padding;
 
   @override
   Widget build(BuildContext context) {
     if (availableCategories.isEmpty) return const SizedBox.shrink();
-    final isAllSelected = selectedCategories.isEmpty;
+    final isAllSelected = selectedCategories.isEmpty && !savedOnly;
 
     return SizedBox(
       height: 39,
@@ -232,6 +238,20 @@ class ParkCategoryFilterBar extends StatelessWidget {
             const SizedBox(width: 7),
             if (hasAnyActiveFilter) ...[
               _ClearAllPill(onTap: onClearAll),
+              const SizedBox(width: 7),
+            ],
+            if (onToggleSavedOnly != null && (savedCount > 0 || savedOnly)) ...[
+              _FilterPill(
+                label: 'Saved',
+                count: savedCount,
+                icon: savedOnly
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                selected: savedOnly,
+                activeColor: wonderlaFlagRed,
+                iconTint: wonderlaFlagRed,
+                onTap: onToggleSavedOnly!,
+              ),
               const SizedBox(width: 7),
             ],
             for (final category in availableCategories) ...[

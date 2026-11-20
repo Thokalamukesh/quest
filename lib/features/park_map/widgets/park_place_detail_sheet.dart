@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../shared/wonderla_palette.dart';
 import '../models/park_discovery_item.dart';
+import '../services/saved_places_store.dart';
 import 'park_map_marker.dart';
 
 /// Opens a Disneyland-inspired, Wonderla-branded information bottom sheet for
@@ -9,6 +10,7 @@ import 'park_map_marker.dart';
 Future<void> showParkPlaceDetailSheet(
   BuildContext context, {
   required ParkDiscoveryItem item,
+  String? parkSlug,
   String? distanceLabel,
   bool routing = false,
   VoidCallback? onDirections,
@@ -24,6 +26,7 @@ Future<void> showParkPlaceDetailSheet(
     backgroundColor: Colors.transparent,
     builder: (ctx) => ParkPlaceDetailSheet(
       item: item,
+      parkSlug: parkSlug,
       distanceLabel: distanceLabel,
       routing: routing,
       onDirections: onDirections == null
@@ -59,6 +62,7 @@ class ParkPlaceDetailSheet extends StatelessWidget {
   const ParkPlaceDetailSheet({
     super.key,
     required this.item,
+    this.parkSlug,
     this.distanceLabel,
     this.routing = false,
     this.onDirections,
@@ -69,6 +73,7 @@ class ParkPlaceDetailSheet extends StatelessWidget {
   });
 
   final ParkDiscoveryItem item;
+  final String? parkSlug;
   final String? distanceLabel;
   final bool routing;
   final VoidCallback? onDirections;
@@ -109,7 +114,7 @@ class ParkPlaceDetailSheet extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _HeroHeader(item: item),
+                  _HeroHeader(item: item, parkSlug: parkSlug),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
                     child: Column(
@@ -314,15 +319,17 @@ class ParkPlaceDetailSheet extends StatelessWidget {
 }
 
 class _HeroHeader extends StatelessWidget {
-  const _HeroHeader({required this.item});
+  const _HeroHeader({required this.item, this.parkSlug});
 
   final ParkDiscoveryItem item;
+  final String? parkSlug;
 
   @override
   Widget build(BuildContext context) {
     final hasImage = item.imageUrl.isNotEmpty;
+    final slug = parkSlug;
     return SizedBox(
-      height: hasImage ? 196 : 124,
+      height: hasImage ? 196 : 128,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -408,21 +415,100 @@ class _HeroHeader extends StatelessWidget {
           Positioned(
             top: 12,
             right: 12,
-            child: Material(
-              color: Colors.white.withValues(alpha: .94),
-              shape: const CircleBorder(),
-              elevation: 3,
-              child: IconButton(
-                tooltip: 'Close',
-                constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                padding: EdgeInsets.zero,
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(
-                  Icons.close_rounded,
-                  color: wonderlaNavy,
-                  size: 20,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (slug != null && slug.isNotEmpty)
+                  ListenableBuilder(
+                    listenable: SavedPlacesStore.instance,
+                    builder: (context, _) {
+                      final saved = SavedPlacesStore.instance.isSaved(
+                        slug,
+                        item.name,
+                      );
+                      final completed = SavedPlacesStore.instance.isCompleted(
+                        slug,
+                        item.name,
+                      );
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Material(
+                            color: completed
+                                ? wonderlaSuccess
+                                : Colors.white.withValues(alpha: .94),
+                            shape: const CircleBorder(),
+                            elevation: 3,
+                            child: IconButton(
+                              tooltip: completed
+                                  ? 'Marked as done'
+                                  : 'Mark as done',
+                              constraints: const BoxConstraints.tightFor(
+                                width: 36,
+                                height: 36,
+                              ),
+                              padding: EdgeInsets.zero,
+                              onPressed: () => SavedPlacesStore.instance
+                                  .toggleCompleted(slug, item.name),
+                              icon: Icon(
+                                completed
+                                    ? Icons.check_rounded
+                                    : Icons.check_circle_outline_rounded,
+                                color: completed ? Colors.white : wonderlaNavy,
+                                size: 19,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Material(
+                            color: Colors.white.withValues(alpha: .94),
+                            shape: const CircleBorder(),
+                            elevation: 3,
+                            child: IconButton(
+                              tooltip: saved
+                                  ? 'Remove from My Day'
+                                  : 'Save to My Day',
+                              constraints: const BoxConstraints.tightFor(
+                                width: 36,
+                                height: 36,
+                              ),
+                              padding: EdgeInsets.zero,
+                              onPressed: () => SavedPlacesStore.instance
+                                  .toggleSaved(slug, item.name),
+                              icon: Icon(
+                                saved
+                                    ? Icons.favorite_rounded
+                                    : Icons.favorite_border_rounded,
+                                color: saved ? wonderlaFlagRed : wonderlaNavy,
+                                size: 19,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                      );
+                    },
+                  ),
+                Material(
+                  color: Colors.white.withValues(alpha: .94),
+                  shape: const CircleBorder(),
+                  elevation: 3,
+                  child: IconButton(
+                    tooltip: 'Close',
+                    constraints: const BoxConstraints.tightFor(
+                      width: 36,
+                      height: 36,
+                    ),
+                    padding: EdgeInsets.zero,
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: wonderlaNavy,
+                      size: 20,
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
         ],

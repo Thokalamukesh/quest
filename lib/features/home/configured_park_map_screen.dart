@@ -12,6 +12,8 @@ import '../park_map/models/park_discovery_item.dart';
 import '../park_map/models/park_map_config.dart';
 import '../park_map/services/location_service.dart';
 import '../park_map/services/open_street_map_service.dart';
+import '../park_map/services/saved_places_store.dart';
+import '../park_map/widgets/dining_menu_sheet.dart';
 import '../park_map/widgets/illustrated_park_map_view.dart';
 import '../park_map/widgets/park_filter_bar.dart';
 import '../park_map/widgets/park_map_marker.dart';
@@ -22,10 +24,12 @@ const _mapNavy = wonderlaCobalt;
 const _mapInk = wonderlaNavy;
 const _mapCanvas = wonderlaCream;
 
+enum _ParkSortMode { featured, shortestWait, nearest }
+
 /// Interactive Wonderla park map and attractions discovery experience.
 /// Preserves existing park config, GPS proximity checks, and OSRM walking
 /// directions while adding multi-select filters, custom category markers,
-/// illustrated park map mode, and rich ride/dining bottom sheets.
+/// illustrated park map mode, My Day saved places, and rich detail sheets.
 class ConfiguredParkMapScreen extends StatefulWidget {
   const ConfiguredParkMapScreen({
     super.key,
@@ -58,6 +62,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   StreamSubscription<Position>? _positionSubscription;
   Future<void>? _locationTask;
 
+  late Map<String, dynamic> _parkConfig;
   late ParkDiscoveryCatalog _catalog;
   LatLng? _center;
   LatLng? _visitorPosition;
@@ -65,15 +70,18 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   WalkingRoute? _route;
   final RouteMode _routeMode = RouteMode.walking;
 
-  // Filter & map view state (updated locally with zero API/map reloads).
+  // Filter, sort & map view state (updated locally with zero API/map reloads).
   final Set<ParkDiscoveryCategory> _selectedCategories = {};
   String? _selectedZone;
+  bool _savedOnly = false;
   bool _shortWaitOnly = false;
   bool _directionsReadyOnly = false;
   bool _kioskBookingOnly = false;
   bool _useIllustratedMap = false;
+  _ParkSortMode _sortMode = _ParkSortMode.featured;
 
   bool _gpsLoading = false;
+  bool _refreshing = false;
   bool _routing = false;
   bool _mapReady = false;
   bool _mapExpanded = false;
@@ -83,15 +91,17 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   String? _locationMessage;
   String? _routeError;
 
+  String get _parkSlug => _parkConfig['slug']?.toString().trim() ?? 'park';
+
   Map<String, dynamic> get _map =>
-      Map<String, dynamic>.from(widget.config['parkMap'] as Map? ?? const {});
+      Map<String, dynamic>.from(_parkConfig['parkMap'] as Map? ?? const {});
 
   String get _parkIdentity => [
-    widget.config['slug'],
-    widget.config['name'],
-    widget.config['location'],
-    widget.config['city'],
-    widget.config['title'],
+    _parkConfig['slug'],
+    _parkConfig['name'],
+    _parkConfig['location'],
+    _parkConfig['city'],
+    _parkConfig['title'],
   ].whereType<Object>().join(' ').toLowerCase();
 
   bool get _isBengaluruPark {
@@ -141,7 +151,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     for (final item in _catalog.items) {
       if (item.position != null) return item.position;
     }
-    if (widget.config['slug'] == 'bengaluru') {
+    if (_parkConfig['slug'] == 'bengaluru') {
       return const LatLng(
         wonderlaBengaluruLatitude,
         wonderlaBengaluruLongitude,
@@ -153,6 +163,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   int get _activeFilterCount =>
       _selectedCategories.length +
       (_selectedZone != null ? 1 : 0) +
+      (_savedOnly ? 1 : 0) +
       (_shortWaitOnly ? 1 : 0) +
       (_directionsReadyOnly ? 1 : 0) +
       (_kioskBookingOnly ? 1 : 0);
@@ -160,18 +171,58 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   bool get _hasAnyActiveFilter =>
       _activeFilterCount > 0 || _searchController.text.trim().isNotEmpty;
 
-  List<ParkDiscoveryItem> get _filteredItems => _catalog.filter(
-    query: _searchController.text,
-    categories: _selectedCategories,
-    zoneName: _selectedZone,
-    shortWaitOnly: _shortWaitOnly,
-    directionsReadyOnly: _directionsReadyOnly,
-    kioskBookingOnly: _kioskBookingOnly,
-  );
+  List<ParkDiscoveryItem> get _filteredItems {
+    var results = _catalog.filter(
+      query: _searchController.text,
+      categories: _selectedCategories,
+      zoneName: _selectedZone,
+      shortWaitOnly: _shortWaitOnly,
+      directionsReadyOnly: _directionsReadyOnly,
+      kioskBookingOnly: _kioskBookingOnly,
+    );
+    if (_savedOnly) {
+      results = results
+          .where((item) => SavedPlacesStore.instance.isSaved(_parkSlug, item.name))
+          .toList(growable: false);
+    }
+    if (_sortMode == _ParkSortMode.shortestWait) {
+      results = [...results]
+        ..sort((a, b) {
+          final aw = a.waitTimeMinutes ?? 9999;
+          final bw = b.waitTimeMinutes ?? 9999;
+          return aw.compareTo(bw);
+        });
+    } else if (_sortMode == _ParkSortMode.nearest && _visitorPosition != null) {
+      final from = _visitorPosition!;
+      results = [...results]
+        ..sort((a, b) {
+          final ad = a.position == null
+              ? double.infinity
+              : Geolocator.distanceBetween(
+                  from.latitude,
+                  from.longitude,
+                  a.position!.latitude,
+                  a.position!.longitude,
+                );
+          final bd = b.position == null
+              ? double.infinity
+              : Geolocator.distanceBetween(
+                  from.latitude,
+                  from.longitude,
+                  b.position!.latitude,
+                  b.position!.longitude,
+                );
+          return ad.compareTo(bd);
+        });
+    }
+    return results;
+  }
 
   @override
   void initState() {
     super.initState();
+    _parkConfig = Map<String, dynamic>.from(widget.config);
+    SavedPlacesStore.instance.addListener(_onSavedChanged);
     _rebuildCatalog();
     _center = _configuredCenter;
 
@@ -193,11 +244,16 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     }
   }
 
+  void _onSavedChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void didUpdateWidget(covariant ConfiguredParkMapScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.config, widget.config) ||
         oldWidget.baseUrl != widget.baseUrl) {
+      _parkConfig = Map<String, dynamic>.from(widget.config);
       _rebuildCatalog();
       _center = _configuredCenter;
     }
@@ -205,10 +261,41 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
 
   void _rebuildCatalog() {
     _catalog = ParkDiscoveryCatalog.fromParkConfig(
-      widget.config,
+      _parkConfig,
       baseUrl: widget.baseUrl,
       isBengaluruPark: _isBengaluruPark,
     );
+  }
+
+  Future<void> _refreshParkConfig() async {
+    if (_refreshing) return;
+    final slug = _parkConfig['slug']?.toString() ?? '';
+    if (slug.isEmpty) return;
+    setState(() => _refreshing = true);
+    try {
+      final api = widget.api ?? CmsApi(baseUrl: widget.baseUrl);
+      final latest = await api.park(slug);
+      if (!mounted) return;
+      setState(() {
+        _parkConfig = latest;
+        _rebuildCatalog();
+        if (_selected != null) {
+          final currentId = _selected!.id;
+          _selected = _catalog.items.cast<ParkDiscoveryItem?>().firstWhere(
+            (i) => i?.id == currentId,
+            orElse: () => _selected,
+          );
+        }
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _routeError = 'Could not refresh live wait times right now.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
   }
 
   void _applyInitialFocus(String focusName) {
@@ -277,6 +364,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
 
   @override
   void dispose() {
+    SavedPlacesStore.instance.removeListener(_onSavedChanged);
     _positionSubscription?.cancel();
     _searchController.dispose();
     _sheetController.dispose();
@@ -363,6 +451,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     setState(() {
       _selectedCategories.clear();
       _selectedZone = null;
+      _savedOnly = false;
       _shortWaitOnly = false;
       _directionsReadyOnly = false;
       _kioskBookingOnly = false;
@@ -430,6 +519,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     showParkPlaceDetailSheet(
       context,
       item: item,
+      parkSlug: _parkSlug,
       distanceLabel: _distanceToVisitor(item),
       routing: _routing,
       onDirections: item.hasGpsCoordinates
@@ -460,6 +550,15 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
       item.isDining || item.isRide || item.isWaterActivity;
 
   void _openDetailsScreen(ParkDiscoveryItem item) {
+    if (item.rawDining != null) {
+      showWonderlaDiningMenuSheet(
+        context,
+        outlet: item.rawDining!,
+        resolveUrl: (path) =>
+            ParkDiscoveryCatalog.resolveMediaUrl(path, widget.baseUrl),
+      );
+      return;
+    }
     final api = widget.api ?? CmsApi(baseUrl: widget.baseUrl);
     final String title;
     final String? initialTab;
@@ -477,7 +576,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
       MaterialPageRoute<void>(
         builder: (_) => VisitorSectionScreen(
           title: title,
-          config: widget.config,
+          config: _parkConfig,
           api: api,
           initialTab: initialTab,
         ),
@@ -701,7 +800,14 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
                   categoryCounts: _catalog.categoryCounts,
                   selectedCategories: _selectedCategories,
                   totalCount: _catalog.items.length,
-                  onSelectAll: () => setState(_selectedCategories.clear),
+                  savedOnly: _savedOnly,
+                  savedCount: SavedPlacesStore.instance.savedCount(_parkSlug),
+                  onToggleSavedOnly: () =>
+                      setState(() => _savedOnly = !_savedOnly),
+                  onSelectAll: () => setState(() {
+                    _selectedCategories.clear();
+                    _savedOnly = false;
+                  }),
                   onToggleCategory: _toggleCategory,
                   hasAnyActiveFilter: _hasAnyActiveFilter,
                   onClearAll: _clearAllFilters,
@@ -711,27 +817,20 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
           ),
         ),
 
+        // Prominent floating Live GPS | Park Guide segmented pill switcher
+        if (_catalog.hasIllustratedMap)
+          Positioned(
+            top: controlsTop,
+            left: 12,
+            child: _mapModeSwitcherPill(),
+          ),
+
         // Right-edge floating map controls
         Positioned(
           top: controlsTop,
           right: 12,
           child: Column(
             children: [
-              if (_catalog.hasIllustratedMap) ...[
-                _mapControlButton(
-                  icon: _useIllustratedMap
-                      ? Icons.map_rounded
-                      : Icons.explore_rounded,
-                  tooltip: _useIllustratedMap
-                      ? 'Switch to Live GPS Map'
-                      : 'Switch to Park Guide Map',
-                  active: _useIllustratedMap,
-                  onTap: () => setState(() {
-                    _useIllustratedMap = !_useIllustratedMap;
-                  }),
-                ),
-                const SizedBox(height: 8),
-              ],
               if (!_useIllustratedMap) ...[
                 _mapControlButton(
                   icon: Icons.my_location_rounded,
@@ -780,14 +879,14 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
 
         if (_routeError != null)
           Positioned(
-            top: controlsTop,
+            top: _catalog.hasIllustratedMap ? controlsTop + 48 : controlsTop,
             left: 12,
             right: 66,
             child: _routeNotice(_routeError!),
           )
         else if (_locationMessage != null && !_gpsLoading && !_useIllustratedMap)
           Positioned(
-            top: controlsTop,
+            top: _catalog.hasIllustratedMap ? controlsTop + 48 : controlsTop,
             left: 12,
             right: 66,
             child: _locationBanner(),
@@ -802,6 +901,83 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
       ],
     );
   }
+
+  Widget _mapModeSwitcherPill() => Material(
+    color: Colors.white.withValues(alpha: .97),
+    elevation: 4,
+    shadowColor: const Color(0x30102454),
+    borderRadius: BorderRadius.circular(24),
+    child: Container(
+      padding: const EdgeInsets.all(3.5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: wonderlaBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _modePillOption(
+            label: 'Live GPS',
+            icon: Icons.map_rounded,
+            selected: !_useIllustratedMap,
+            onTap: () {
+              if (_useIllustratedMap) {
+                setState(() => _useIllustratedMap = false);
+              }
+            },
+          ),
+          _modePillOption(
+            label: 'Park Guide',
+            icon: Icons.explore_rounded,
+            selected: _useIllustratedMap,
+            onTap: () {
+              if (!_useIllustratedMap) {
+                setState(() => _useIllustratedMap = true);
+              }
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _modePillOption({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(20),
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      decoration: BoxDecoration(
+        color: selected ? wonderlaNavy : Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 14.5,
+            color: selected ? wonderlaGold : wonderlaMuted,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : wonderlaNavy,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _liveMap(List<ParkDiscoveryItem> visibleItems) {
     final initialCenter = _center;
@@ -988,6 +1164,9 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     ScrollController? scrollController,
   }) {
     final query = _searchController.text.trim();
+    final showSortBar =
+        _route == null &&
+        (_catalog.hasAnyWaitTimes || _visitorPosition != null);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1004,7 +1183,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
             ),
           ),
         Padding(
-          padding: EdgeInsets.fromLTRB(16, isWide ? 14 : 6, 14, 10),
+          padding: EdgeInsets.fromLTRB(16, isWide ? 14 : 6, 12, 8),
           child: Row(
             children: [
               Expanded(
@@ -1031,10 +1210,50 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
                   ],
                 ),
               ),
+              if (widget.baseUrl.isNotEmpty)
+                IconButton(
+                  tooltip: 'Refresh live wait times',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 34,
+                    height: 34,
+                  ),
+                  padding: EdgeInsets.zero,
+                  onPressed: _refreshing ? null : _refreshParkConfig,
+                  icon: _refreshing
+                      ? const SizedBox(
+                          width: 15,
+                          height: 15,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: wonderlaCobalt,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.refresh_rounded,
+                          size: 19,
+                          color: wonderlaCobalt,
+                        ),
+                ),
+              const SizedBox(width: 4),
               _locationStatus(),
             ],
           ),
         ),
+        if (showSortBar)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _sortChip('Featured', _ParkSortMode.featured),
+                if (_catalog.hasAnyWaitTimes)
+                  _sortChip('Shortest wait', _ParkSortMode.shortestWait),
+                if (_visitorPosition != null)
+                  _sortChip('Nearest', _ParkSortMode.nearest),
+              ],
+            ),
+          ),
         if (_selected != null && _route == null) _selectedBanner(_selected!),
         Expanded(
           child: _route != null
@@ -1051,6 +1270,31 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _sortChip(String label, _ParkSortMode mode) {
+    final active = _sortMode == mode;
+    return InkWell(
+      onTap: () => setState(() => _sortMode = mode),
+      borderRadius: BorderRadius.circular(14),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
+        decoration: BoxDecoration(
+          color: active ? wonderlaNavy : wonderlaCream,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: active ? wonderlaNavy : wonderlaBorder),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: active ? Colors.white : wonderlaNavy,
+            fontSize: 11.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
     );
   }
 
@@ -1174,16 +1418,21 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   Widget _discoveryPlaceCard(ParkDiscoveryItem item) {
     final selected = _selected?.id == item.id;
     final distance = _distanceToVisitor(item);
+    final saved = SavedPlacesStore.instance.isSaved(_parkSlug, item.name);
+    final completed = SavedPlacesStore.instance.isCompleted(
+      _parkSlug,
+      item.name,
+    );
     return Material(
       color: selected ? const Color(0xFFF0F5FF) : Colors.white,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: () => _onSelectItem(item),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(
               color: selected ? wonderlaCobalt : wonderlaBorder,
               width: selected ? 1.5 : 1,
@@ -1197,15 +1446,37 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      item.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: _mapInk,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 14,
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            item.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _mapInk,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                        if (saved) ...[
+                          const SizedBox(width: 5),
+                          const Icon(
+                            Icons.favorite_rounded,
+                            size: 13.5,
+                            color: wonderlaFlagRed,
+                          ),
+                        ],
+                        if (completed) ...[
+                          const SizedBox(width: 4),
+                          const Icon(
+                            Icons.check_circle_rounded,
+                            size: 13.5,
+                            color: wonderlaSuccess,
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 3),
                     Row(

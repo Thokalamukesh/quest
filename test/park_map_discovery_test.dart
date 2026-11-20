@@ -6,6 +6,8 @@ import 'package:maps_wonderla_flutter/features/cms/cms_api.dart';
 import 'package:maps_wonderla_flutter/features/home/configured_park_map_screen.dart';
 import 'package:maps_wonderla_flutter/features/home/visitor_home.dart';
 import 'package:maps_wonderla_flutter/features/park_map/models/park_discovery_item.dart';
+import 'package:maps_wonderla_flutter/features/park_map/services/park_schedule_helper.dart';
+import 'package:maps_wonderla_flutter/features/park_map/services/saved_places_store.dart';
 import 'package:maps_wonderla_flutter/features/park_map/widgets/park_filter_bar.dart';
 import 'package:maps_wonderla_flutter/features/park_map/widgets/park_map_marker.dart';
 
@@ -313,6 +315,124 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('RECOIL'), findsOneWidget);
       expect(find.text('Book a ride slot at park kiosks'), findsOneWidget);
+    },
+  );
+
+  test('ParkScheduleHelper parses real schedules and shortest wait time', () {
+    final config = _sampleParkConfig();
+    final next = ParkScheduleHelper.nextActivity(
+      config,
+      now: DateTime(2026, 11, 20, 11, 45),
+    );
+    expect(next, isNotNull);
+    expect(next!.title, 'Wave Pool');
+    expect(next.timeLabel, '12:00 PM');
+    expect(next.countdownLabel, 'In 15 min');
+
+    final shortest = ParkScheduleHelper.shortestWait(config);
+    expect(shortest, isNotNull);
+    expect(shortest!.title, 'Lazy River');
+    expect(shortest.minutes, 10);
+  });
+
+  testWidgets(
+    'My Day Saved filter, Shortest wait sort, and Live GPS / Park Guide switcher work cleanly',
+    (tester) async {
+      SavedPlacesStore.instance.clearPark('bengaluru');
+      addTearDown(() => SavedPlacesStore.instance.clearPark('bengaluru'));
+
+      tester.view.physicalSize = const Size(1024, 768);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final config = _sampleParkConfig();
+      (config['parkMap'] as Map)['img'] = '/wonderla/parks/bengaluru-layout.jpg';
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ConfiguredParkMapScreen(
+            config: config,
+            baseUrl: 'http://localhost:3000',
+            api: CmsApi(baseUrl: 'http://localhost:3000'),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Prominent Live GPS | Park Guide pill appears when map artwork is available.
+      expect(find.text('Live GPS'), findsOneWidget);
+      expect(find.text('Park Guide'), findsOneWidget);
+
+      // Save Recoil via store -> Saved filter chip appears dynamically and filters to 1 place.
+      SavedPlacesStore.instance.toggleSaved('bengaluru', 'Recoil');
+      await tester.pump();
+      expect(find.text('Saved'), findsOneWidget);
+
+      await tester.tap(find.text('Saved'));
+      await tester.pump();
+      expect(find.text('1 place available'), findsOneWidget);
+
+      // Shortest wait sort pill is available because liveWaitTimes exist.
+      expect(find.text('Shortest wait'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'VisitorHome shows Up Next schedule highlight and Shortest wait pill from real data',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: VisitorHome(initialPark: _sampleParkConfig()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('UP NEXT'), findsOneWidget);
+      expect(find.text('Wave Pool'), findsOneWidget);
+      expect(find.text('Shortest wait: Lazy River · 10m'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'VisitorSectionScreen Dining supports Pure Veg filter and direct menu sheet',
+    (tester) async {
+      final config = _sampleParkConfig();
+      (config['dining'] as List).add({
+        'img': '',
+        'name': 'Smoke & Grill',
+        'cuisine': 'BBQ & Arabian',
+        'description': 'Tandoori tikkas and shawarma.',
+        'tags': ['BBQ'],
+        'items': [
+          {'name': 'Chicken Shawarma', 'price': '₹180', 'veg': false, 'img': ''},
+        ],
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: VisitorSectionScreen(
+            title: 'DINING & MENU',
+            config: config,
+            api: CmsApi(baseUrl: 'http://localhost:3000'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Park View Restaurant'), findsOneWidget);
+      expect(find.text('Smoke & Grill'), findsOneWidget);
+
+      await tester.tap(find.text('Pure Veg'));
+      await tester.pumpAndSettle();
+      expect(find.text('Park View Restaurant'), findsOneWidget);
+      expect(find.text('Smoke & Grill'), findsNothing);
+
+      // Tap Park View Restaurant -> opens shared interactive menu sheet.
+      await tester.tap(find.text('Park View Restaurant'));
+      await tester.pumpAndSettle();
+      expect(find.text('Masala Dosa'), findsOneWidget);
+      expect(find.text('₹150'), findsOneWidget);
     },
   );
 }
