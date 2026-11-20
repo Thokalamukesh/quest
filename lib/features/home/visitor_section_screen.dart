@@ -18,15 +18,51 @@ class VisitorSectionScreen extends StatefulWidget {
 
 class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
   late Map<String, dynamic> _config;
+  late List<ParkDiscoveryItem> _rideItems;
+  late Map<ParkDiscoveryCategory, int> _rideCategoryCounts;
+  late List<ParkDiscoveryCategory> _rideAvailableCategories;
+
+  final _rideSearchController = TextEditingController();
+  final Set<ParkDiscoveryCategory> _selectedRideCategories = {};
+
   bool _loading = false;
   String? _error;
   late String _rideTab;
   String _menuFilter = 'All';
+
   @override
   void initState() {
     super.initState();
     _config = Map<String, dynamic>.from(widget.config);
     _rideTab = widget.initialTab ?? 'Rides';
+    _rebuildRideCache();
+  }
+
+  @override
+  void dispose() {
+    _rideSearchController.dispose();
+    super.dispose();
+  }
+
+  void _rebuildRideCache() {
+    final rides = _list('rides');
+    _rideItems = rides
+        .map(
+          (ride) => ParkDiscoveryCatalog.fromRideEntry(
+            ride,
+            config: _config,
+            baseUrl: widget.api.baseUrl,
+          ),
+        )
+        .toList(growable: false);
+    final counts = <ParkDiscoveryCategory, int>{};
+    for (final item in _rideItems) {
+      counts[item.category] = (counts[item.category] ?? 0) + 1;
+    }
+    _rideCategoryCounts = counts;
+    _rideAvailableCategories = ParkDiscoveryCategory.values
+        .where(counts.containsKey)
+        .toList(growable: false);
   }
 
   Future<void> _refresh() async {
@@ -36,10 +72,32 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
     });
     try {
       _config = await widget.api.park(widget.config['slug'] as String);
+      _rebuildRideCache();
     } catch (e) {
       _error = e.toString();
     }
     if (mounted) setState(() => _loading = false);
+  }
+
+  void _openParkMap({String? focusPlaceName}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ConfiguredParkMapScreen(
+          config: _config,
+          baseUrl: widget.api.baseUrl,
+          api: widget.api,
+          initialFocusPlaceName: focusPlaceName,
+        ),
+      ),
+    );
+  }
+
+  void _openRideSheet(ParkDiscoveryItem item) {
+    showParkPlaceDetailSheet(
+      context,
+      item: item,
+      onLocateOnMap: () => _openParkMap(focusPlaceName: item.name),
+    );
   }
 
   String _url(String? value) {
@@ -55,43 +113,52 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
         ),
       );
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: _pale,
-    appBar: AppBar(
-      backgroundColor: wonderlaWhite,
-      foregroundColor: wonderlaNavy,
-      surfaceTintColor: wonderlaWhite,
-      toolbarHeight: 68,
-      title: Text(
-        widget.title,
-        style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+  Widget build(BuildContext context) {
+    final actions = <Widget>[
+      if (['RIDES & WATER ACTIVITIES', 'DINING & MENU'].contains(widget.title))
+        IconButton(
+          tooltip: 'Open Park Map',
+          onPressed: _openParkMap,
+          icon: const Icon(Icons.map_outlined),
+        ),
+      if (['RIDES & WATER ACTIVITIES', 'MAINTENANCE LOG'].contains(widget.title))
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: _refresh,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+    ];
+
+    return Scaffold(
+      backgroundColor: _pale,
+      appBar: AppBar(
+        backgroundColor: wonderlaWhite,
+        foregroundColor: wonderlaNavy,
+        surfaceTintColor: wonderlaWhite,
+        toolbarHeight: 68,
+        title: Text(
+          widget.title,
+          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+        ),
+        leading: IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded),
+        ),
+        actions: actions.isEmpty ? null : actions,
       ),
-      leading: IconButton(
-        onPressed: () => Navigator.pop(context),
-        icon: const Icon(Icons.arrow_back_ios_new_rounded),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 30),
+          children: [
+            if (_error != null) _notice(_error!, error: true),
+            if (_loading) const LinearProgressIndicator(color: _navy),
+            ..._content(),
+          ],
+        ),
       ),
-      actions:
-          ['RIDES & WATER ACTIVITIES', 'MAINTENANCE LOG'].contains(widget.title)
-          ? [
-              IconButton(
-                onPressed: _refresh,
-                icon: const Icon(Icons.refresh_rounded),
-              ),
-            ]
-          : null,
-    ),
-    body: RefreshIndicator(
-      onRefresh: _refresh,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 30),
-        children: [
-          if (_error != null) _notice(_error!, error: true),
-          if (_loading) const LinearProgressIndicator(color: _navy),
-          ..._content(),
-        ],
-      ),
-    ),
-  );
+    );
+  }
 
   List<Widget> _content() => switch (widget.title) {
     'RIDES & WATER ACTIVITIES' => _ridesEvents(),
@@ -104,7 +171,6 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
   };
 
   List<Widget> _ridesEvents() {
-    final rides = _list('rides');
     final tabLabels = ['Rides', 'Water activities', 'Live wait time'];
     final tabs = Wrap(
       spacing: 8,
@@ -125,16 +191,206 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
           ),
       ],
     );
+
+    final query = _rideSearchController.text.trim().toLowerCase();
+    final hasFilter = _selectedRideCategories.isNotEmpty || query.isNotEmpty;
+    final filteredRides = _rideItems
+        .where((item) {
+          if (_selectedRideCategories.isNotEmpty &&
+              !_selectedRideCategories.contains(item.category)) {
+            return false;
+          }
+          if (query.isNotEmpty && !item.searchIndex.contains(query)) {
+            return false;
+          }
+          return true;
+        })
+        .toList(growable: false);
+
     return [
       tabs,
       const SizedBox(height: 14),
       if (_rideTab == 'Live wait time') ..._waitTimes(),
       if (_rideTab == 'Water activities') ..._wave(),
-      if (_rideTab == 'Rides' && rides.isEmpty) _empty('Rides'),
-      if (_rideTab == 'Rides')
-        for (final item in rides) _mediaCard(item),
+      if (_rideTab == 'Rides' && _rideItems.isEmpty) _empty('Rides'),
+      if (_rideTab == 'Rides' && _rideItems.isNotEmpty) ...[
+        ParkFloatingSearchHeader(
+          controller: _rideSearchController,
+          hintText: 'Search rides, thrill level, themes…',
+          onChanged: (_) => setState(() {}),
+          onClear: () {
+            _rideSearchController.clear();
+            setState(() {});
+          },
+        ),
+        if (_rideAvailableCategories.length > 1 || hasFilter) ...[
+          const SizedBox(height: 10),
+          ParkCategoryFilterBar(
+            availableCategories: _rideAvailableCategories,
+            categoryCounts: _rideCategoryCounts,
+            selectedCategories: _selectedRideCategories,
+            totalCount: _rideItems.length,
+            padding: EdgeInsets.zero,
+            onSelectAll: () => setState(_selectedRideCategories.clear),
+            onToggleCategory: (category) => setState(() {
+              if (!_selectedRideCategories.add(category)) {
+                _selectedRideCategories.remove(category);
+              }
+            }),
+            hasAnyActiveFilter: hasFilter,
+            onClearAll: () {
+              _rideSearchController.clear();
+              setState(_selectedRideCategories.clear);
+            },
+          ),
+        ],
+        const SizedBox(height: 14),
+        if (filteredRides.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            child: Column(
+              children: [
+                const Icon(
+                  Icons.filter_alt_off_rounded,
+                  color: wonderlaMuted,
+                  size: 36,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'No rides match your current search or filters.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: wonderlaNavy,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    _rideSearchController.clear();
+                    setState(_selectedRideCategories.clear);
+                  },
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  label: const Text('Clear all filters'),
+                ),
+              ],
+            ),
+          )
+        else
+          for (final item in filteredRides) _rideDiscoveryCard(item),
+      ],
     ];
   }
+
+  Widget _rideDiscoveryCard(ParkDiscoveryItem item) => Card(
+    color: Colors.white,
+    margin: const EdgeInsets.only(bottom: 14),
+    clipBehavior: Clip.antiAlias,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(22),
+      side: const BorderSide(color: wonderlaBorder),
+    ),
+    child: InkWell(
+      onTap: () => _openRideSheet(item),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _thumb(item.rawRide?['img']?.toString(), size: 108),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: item.category.tintColor,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              item.icon,
+                              size: 13,
+                              color: item.category.color,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              item.category.shortLabel,
+                              style: TextStyle(
+                                color: item.category.color,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (item.waitTimeMinutes != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: wonderlaWaitTimeColor(item.waitTimeMinutes!),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Text(
+                            '${item.waitTimeMinutes} min wait',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    item.name.toUpperCase(),
+                    style: const TextStyle(
+                      color: _navy,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 17.5,
+                      height: 1.12,
+                    ),
+                  ),
+                  if (item.description.isNotEmpty) ...[
+                    const SizedBox(height: 5),
+                    Text(
+                      item.description,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: wonderlaNavy,
+                        fontSize: 13.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  _tags(item.tags),
+                  if (item.kioskBookingEnabled) const _BookingCallout(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   List<Widget> _events() => [
     if (_list('events').isEmpty) _empty('Events'),

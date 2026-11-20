@@ -5,28 +5,42 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../shared/wonderla_palette.dart';
+import '../cms/cms_api.dart';
 import '../park_map/models/map_place.dart';
+import '../park_map/models/park_discovery_item.dart';
 import '../park_map/models/park_map_config.dart';
-import '../park_map/models/wonderla_location_catalog.dart';
 import '../park_map/services/location_service.dart';
 import '../park_map/services/open_street_map_service.dart';
-import '../../shared/wonderla_palette.dart';
+import '../park_map/widgets/illustrated_park_map_view.dart';
+import '../park_map/widgets/park_filter_bar.dart';
+import '../park_map/widgets/park_map_marker.dart';
+import '../park_map/widgets/park_place_detail_sheet.dart';
+import 'visitor_home.dart';
 
 const _mapNavy = wonderlaCobalt;
 const _mapInk = wonderlaNavy;
 const _mapCanvas = wonderlaCream;
 
-/// Park map centered on the selected park, with visitor GPS shown only nearby.
+/// Interactive Wonderla park map and attractions discovery experience.
+/// Preserves existing park config, GPS proximity checks, and OSRM walking
+/// directions while adding multi-select filters, custom category markers,
+/// illustrated park map mode, and rich ride/dining bottom sheets.
 class ConfiguredParkMapScreen extends StatefulWidget {
   const ConfiguredParkMapScreen({
     super.key,
     required this.config,
     required this.baseUrl,
     this.initialPosition,
+    this.api,
+    this.initialFocusPlaceName,
   });
+
   final Map<String, dynamic> config;
   final String baseUrl;
   final Position? initialPosition;
+  final CmsApi? api;
+  final String? initialFocusPlaceName;
 
   @override
   State<ConfiguredParkMapScreen> createState() =>
@@ -35,31 +49,43 @@ class ConfiguredParkMapScreen extends StatefulWidget {
 
 class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   final _controller = MapController();
+  final _illustratedController = IllustratedParkMapController();
+  final _sheetController = DraggableScrollableController();
   final _location = LocationService();
   final _routingService = OpenStreetMapService();
   final _searchController = TextEditingController();
+
   StreamSubscription<Position>? _positionSubscription;
   Future<void>? _locationTask;
+
+  late ParkDiscoveryCatalog _catalog;
   LatLng? _center;
   LatLng? _visitorPosition;
-  Map<String, dynamic>? _selected;
+  ParkDiscoveryItem? _selected;
   WalkingRoute? _route;
   final RouteMode _routeMode = RouteMode.walking;
+
+  // Filter & map view state (updated locally with zero API/map reloads).
+  final Set<ParkDiscoveryCategory> _selectedCategories = {};
+  String? _selectedZone;
+  bool _shortWaitOnly = false;
+  bool _directionsReadyOnly = false;
+  bool _kioskBookingOnly = false;
+  bool _useIllustratedMap = false;
+
   bool _gpsLoading = false;
   bool _routing = false;
   bool _mapReady = false;
   bool _mapExpanded = false;
+  bool _showMarkerLabels = false;
+  double _currentZoom = 16.0;
   int _routeRequestId = 0;
   String? _locationMessage;
   String? _routeError;
 
   Map<String, dynamic> get _map =>
       Map<String, dynamic>.from(widget.config['parkMap'] as Map? ?? const {});
-  List<Map<String, dynamic>> get _places => List<Map<String, dynamic>>.from(
-    (_map['places'] as List? ?? const []).map(
-      (e) => Map<String, dynamic>.from(e as Map),
-    ),
-  );
+
   String get _parkIdentity => [
     widget.config['slug'],
     widget.config['name'],
@@ -72,8 +98,9 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     if (RegExp(r'\b(bengaluru|bangalore)\b').hasMatch(_parkIdentity)) {
       return true;
     }
-    if (RegExp(r'\b(kochi|cochin|hyderabad|bhubaneswar|chennai)\b')
-        .hasMatch(_parkIdentity)) {
+    if (RegExp(
+      r'\b(kochi|cochin|hyderabad|bhubaneswar|chennai)\b',
+    ).hasMatch(_parkIdentity)) {
       return false;
     }
     final lat = double.tryParse('${_map['centerLat']}');
@@ -89,38 +116,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
             5000;
   }
 
-  LatLng? _placePosition(Map<String, dynamic> place) {
-    final lat = double.tryParse('${place['lat']}');
-    final lng = double.tryParse('${place['lng']}');
-    if (lat != null &&
-        lng != null &&
-        lat >= -90 &&
-        lat <= 90 &&
-        lng >= -180 &&
-        lng <= 180) {
-      return LatLng(lat, lng);
-    }
-
-    // These in-park destinations ship with verified coordinates, so they
-    // remain routable even when CMS entries have no lat/lng fields.
-    if (_isBengaluruPark) {
-      final name = _normalizePlaceName(place['name']?.toString() ?? '');
-      for (final known in wonderlaFeaturedLocations) {
-        final knownName = _normalizePlaceName(known.name);
-        if (name == knownName || knownName.startsWith('$name ')) {
-          return known.position;
-        }
-      }
-    }
-    return null;
-  }
-
-  String _normalizePlaceName(String value) =>
-      value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
-
   LatLng? get _configuredCenter {
-    // CMS park records may not include the slug in every response path, so
-    // identify the selected park from its display name and location too.
     final identity = _parkIdentity;
     for (final entry in wonderlaParkCoordinates.entries) {
       final aliases = switch (entry.key) {
@@ -142,9 +138,8 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         lng <= 180) {
       return LatLng(lat, lng);
     }
-    for (final place in _places) {
-      final position = _placePosition(place);
-      if (position != null) return position;
+    for (final item in _catalog.items) {
+      if (item.position != null) return item.position;
     }
     if (widget.config['slug'] == 'bengaluru') {
       return const LatLng(
@@ -155,11 +150,31 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     return null;
   }
 
+  int get _activeFilterCount =>
+      _selectedCategories.length +
+      (_selectedZone != null ? 1 : 0) +
+      (_shortWaitOnly ? 1 : 0) +
+      (_directionsReadyOnly ? 1 : 0) +
+      (_kioskBookingOnly ? 1 : 0);
+
+  bool get _hasAnyActiveFilter =>
+      _activeFilterCount > 0 || _searchController.text.trim().isNotEmpty;
+
+  List<ParkDiscoveryItem> get _filteredItems => _catalog.filter(
+    query: _searchController.text,
+    categories: _selectedCategories,
+    zoneName: _selectedZone,
+    shortWaitOnly: _shortWaitOnly,
+    directionsReadyOnly: _directionsReadyOnly,
+    kioskBookingOnly: _kioskBookingOnly,
+  );
+
   @override
   void initState() {
     super.initState();
+    _rebuildCatalog();
     _center = _configuredCenter;
-    // Always open on the live map; the configured artwork can be slow or stale.
+
     final initialPosition = widget.initialPosition;
     if (initialPosition != null) {
       final point = LatLng(initialPosition.latitude, initialPosition.longitude);
@@ -170,6 +185,55 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         _locationMessage =
             'You are outside the park area. Showing the park map.';
       }
+    }
+
+    final focusName = widget.initialFocusPlaceName?.trim() ?? '';
+    if (focusName.isNotEmpty) {
+      _applyInitialFocus(focusName);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant ConfiguredParkMapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.config, widget.config) ||
+        oldWidget.baseUrl != widget.baseUrl) {
+      _rebuildCatalog();
+      _center = _configuredCenter;
+    }
+  }
+
+  void _rebuildCatalog() {
+    _catalog = ParkDiscoveryCatalog.fromParkConfig(
+      widget.config,
+      baseUrl: widget.baseUrl,
+      isBengaluruPark: _isBengaluruPark,
+    );
+  }
+
+  void _applyInitialFocus(String focusName) {
+    final targetNorm = ParkDiscoveryCatalog.normalizePlaceName(focusName);
+    ParkDiscoveryItem? match;
+    for (final item in _catalog.items) {
+      final norm = ParkDiscoveryCatalog.normalizePlaceName(item.name);
+      if (norm == targetNorm ||
+          norm.startsWith('$targetNorm ') ||
+          targetNorm.startsWith('$norm ')) {
+        match = item;
+        break;
+      }
+    }
+    if (match == null) return;
+    _selected = match;
+    if (match.position != null) {
+      _center = match.position;
+    } else if (match.hasIllustratedCoords && _catalog.hasIllustratedMap) {
+      _useIllustratedMap = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && match?.mapX != null && match?.mapY != null) {
+          _illustratedController.focusPercent(match!.mapX!, match.mapY!);
+        }
+      });
     }
   }
 
@@ -186,6 +250,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         });
         if (_visitorPosition == null &&
             _mapReady &&
+            !_useIllustratedMap &&
             _configuredCenter != null) {
           _controller.move(_configuredCenter!, 16);
         }
@@ -214,6 +279,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   void dispose() {
     _positionSubscription?.cancel();
     _searchController.dispose();
+    _sheetController.dispose();
     _routingService.dispose();
     super.dispose();
   }
@@ -255,38 +321,198 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     });
     if (position != null &&
         _isNearPark(LatLng(position.latitude, position.longitude)) &&
-        _mapReady) {
+        _mapReady &&
+        !_useIllustratedMap) {
       _controller.move(LatLng(position.latitude, position.longitude), 17);
-    } else if (position != null && _mapReady && _configuredCenter != null) {
+    } else if (position != null &&
+        _mapReady &&
+        !_useIllustratedMap &&
+        _configuredCenter != null) {
       _controller.move(_configuredCenter!, 16);
     }
   }
 
-  void _focusPlace(Map<String, dynamic> place) {
-    _routeRequestId++;
-    final position = _placePosition(place);
+  void _resetMapView() {
+    if (_useIllustratedMap) {
+      _illustratedController.reset();
+      return;
+    }
+    final target = _configuredCenter;
+    if (target != null && _mapReady) {
+      _controller.rotate(0);
+      _controller.move(target, 16);
+    }
+  }
+
+  void _zoomBy(double delta) {
+    if (_useIllustratedMap) {
+      if (delta > 0) {
+        _illustratedController.zoomIn();
+      } else {
+        _illustratedController.zoomOut();
+      }
+      return;
+    }
+    if (!_mapReady) return;
+    final nextZoom = (_currentZoom + delta).clamp(14.5, 19.0);
+    _controller.move(_controller.camera.center, nextZoom);
+  }
+
+  void _clearAllFilters() {
+    _searchController.clear();
     setState(() {
-      _selected = place;
+      _selectedCategories.clear();
+      _selectedZone = null;
+      _shortWaitOnly = false;
+      _directionsReadyOnly = false;
+      _kioskBookingOnly = false;
+    });
+  }
+
+  void _toggleCategory(ParkDiscoveryCategory category) {
+    setState(() {
+      if (!_selectedCategories.add(category)) {
+        _selectedCategories.remove(category);
+      }
+    });
+  }
+
+  Future<void> _openFilterSheet() async {
+    final result = await showParkFilterSheet(
+      context,
+      catalog: _catalog,
+      currentSearchQuery: _searchController.text,
+      initial: ParkFilterSelection(
+        categories: _selectedCategories,
+        zoneName: _selectedZone,
+        shortWaitOnly: _shortWaitOnly,
+        directionsReadyOnly: _directionsReadyOnly,
+        kioskBookingOnly: _kioskBookingOnly,
+        useIllustratedMap: _useIllustratedMap,
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _selectedCategories
+        ..clear()
+        ..addAll(result.categories);
+      _selectedZone = result.zoneName;
+      _shortWaitOnly = result.shortWaitOnly;
+      _directionsReadyOnly = result.directionsReadyOnly;
+      _kioskBookingOnly = result.kioskBookingOnly;
+      _useIllustratedMap = result.useIllustratedMap;
+    });
+  }
+
+  void _onSelectItem(ParkDiscoveryItem item, {bool openSheet = true}) {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _selected = item;
+      _routeError = null;
+    });
+    if (!_useIllustratedMap && item.position != null && _mapReady) {
+      _controller.move(item.position!, 17.8);
+    } else if (_useIllustratedMap && item.hasIllustratedCoords) {
+      _illustratedController.focusPercent(item.mapX!, item.mapY!);
+    }
+    if (openSheet) {
+      _openItemDetailSheet(item);
+    }
+  }
+
+  void _openItemDetailSheet(ParkDiscoveryItem item) {
+    final canSwitchToGuideMap =
+        !_useIllustratedMap &&
+        !item.hasGpsCoordinates &&
+        item.hasIllustratedCoords &&
+        _catalog.hasIllustratedMap;
+
+    showParkPlaceDetailSheet(
+      context,
+      item: item,
+      distanceLabel: _distanceToVisitor(item),
+      routing: _routing,
+      onDirections: item.hasGpsCoordinates
+          ? () => _startDirectionsTo(item)
+          : null,
+      onShowOnGuideMap: canSwitchToGuideMap
+          ? () {
+              setState(() => _useIllustratedMap = true);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted && item.hasIllustratedCoords) {
+                  _illustratedController.focusPercent(item.mapX!, item.mapY!);
+                }
+              });
+            }
+          : null,
+      onViewDetails: _canViewDetails(item) ? () => _openDetailsScreen(item) : null,
+      viewDetailsLabel: item.isDining
+          ? 'View Menu'
+          : item.isWaterActivity
+          ? 'Water Activities'
+          : item.isRide
+          ? 'View Ride Details'
+          : 'Explore Section',
+    );
+  }
+
+  bool _canViewDetails(ParkDiscoveryItem item) =>
+      item.isDining || item.isRide || item.isWaterActivity;
+
+  void _openDetailsScreen(ParkDiscoveryItem item) {
+    final api = widget.api ?? CmsApi(baseUrl: widget.baseUrl);
+    final String title;
+    final String? initialTab;
+    if (item.isDining) {
+      title = 'DINING & MENU';
+      initialTab = null;
+    } else if (item.rawWaveSession != null) {
+      title = 'RIDES & WATER ACTIVITIES';
+      initialTab = 'Water activities';
+    } else {
+      title = 'RIDES & WATER ACTIVITIES';
+      initialTab = 'Rides';
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VisitorSectionScreen(
+          title: title,
+          config: widget.config,
+          api: api,
+          initialTab: initialTab,
+        ),
+      ),
+    );
+  }
+
+  void _startDirectionsTo(ParkDiscoveryItem item) {
+    _routeRequestId++;
+    setState(() {
+      _selected = item;
       _route = null;
       _routeError = null;
       _routing = false;
+      if (_useIllustratedMap) _useIllustratedMap = false;
     });
+    final position = item.position;
     if (position == null) {
       setState(
-        () => _routeError = 'Add this place’s Latitude and Longitude in CMS Admin → Park map → Map places. Save the item and map configuration, then tap it again.',
+        () => _routeError =
+            'Add this place’s Latitude and Longitude in CMS Admin → Park map → Map places. Save the item and map configuration, then tap it again.',
       );
       return;
     }
     if (_mapReady) _controller.move(position, 18);
-    _requestDirections(place);
+    _requestDirections(item);
   }
 
-  Future<void> _requestDirections(Map<String, dynamic> place) async {
+  Future<void> _requestDirections(ParkDiscoveryItem item) async {
     final requestId = ++_routeRequestId;
-    final destination = _placePosition(place);
+    final destination = item.position;
     if (destination == null) {
       setState(
-        () => _routeError = 'Add this place’s latitude and longitude in the CMS to get directions.',
+        () => _routeError =
+            'Add this place’s latitude and longitude in the CMS to get directions.',
       );
       return;
     }
@@ -337,7 +563,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     _controller.fitCamera(
       CameraFit.coordinates(
         coordinates: route.points,
-        padding: const EdgeInsets.fromLTRB(36, 112, 72, 56),
+        padding: const EdgeInsets.fromLTRB(36, 130, 72, 90),
         maxZoom: 18,
       ),
     );
@@ -345,174 +571,274 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final places = _places;
+    final visibleItems = _filteredItems;
     return Scaffold(
       backgroundColor: _mapCanvas,
-      appBar: AppBar(
-        backgroundColor: _mapCanvas,
-        foregroundColor: _mapInk,
-        elevation: 0,
-        leading: IconButton(
-          tooltip: 'Back',
-          onPressed: () => Navigator.of(context).maybePop(),
-          icon: const Icon(Icons.arrow_back_rounded),
-        ),
-        titleSpacing: 0,
-        title: _searchBox(),
-      ),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final map = _mapPanel(places);
-            final locations = _placeTray(places);
-            if (constraints.maxWidth >= 760) {
-              return Row(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth >= 760;
+          if (isWide) {
+            return SafeArea(
+              child: Row(
                 children: [
-                  Expanded(flex: 11, child: map),
-                  Expanded(flex: 9, child: locations),
+                  Expanded(
+                    flex: 13,
+                    child: _mapStage(visibleItems, isWide: true),
+                  ),
+                  SizedBox(
+                    width: (constraints.maxWidth * 0.35).clamp(320.0, 410.0),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        border: Border(
+                          left: BorderSide(color: wonderlaBorder),
+                        ),
+                      ),
+                      child: _discoveryPanelContent(
+                        visibleItems,
+                        isWide: true,
+                      ),
+                    ),
+                  ),
                 ],
-              );
-            }
-            if (_mapExpanded) return map;
-            return Column(
-              children: [
-                Expanded(flex: 6, child: map),
-                Expanded(flex: 4, child: locations),
-              ],
+              ),
             );
-          },
-        ),
+          }
+
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              _mapStage(visibleItems, isWide: false),
+              if (!_mapExpanded)
+                DraggableScrollableSheet(
+                  controller: _sheetController,
+                  initialChildSize: 0.30,
+                  minChildSize: 0.14,
+                  maxChildSize: 0.84,
+                  snap: true,
+                  snapSizes: const [0.14, 0.30, 0.62, 0.84],
+                  builder: (context, scrollController) => Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(26),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x28102454),
+                          blurRadius: 24,
+                          offset: Offset(0, -6),
+                        ),
+                      ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: _discoveryPanelContent(
+                      visibleItems,
+                      isWide: false,
+                      scrollController: scrollController,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _mapPanel(List<Map<String, dynamic>> places) => Stack(
-    fit: StackFit.expand,
-    children: [
-      _liveMap(places),
-      if (MediaQuery.sizeOf(context).width < 760)
+  Widget _mapStage(
+    List<ParkDiscoveryItem> visibleItems, {
+    required bool isWide,
+  }) {
+    final topPadding = MediaQuery.paddingOf(context).top;
+    final overlayTop = isWide ? 12.0 : topPadding + 10.0;
+    final controlsTop =
+        overlayTop + (_catalog.availableCategories.isEmpty ? 62.0 : 108.0);
+    final bottomOffset = isWide || _mapExpanded ? 16.0 : 210.0;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (_useIllustratedMap && _catalog.hasIllustratedMap)
+          IllustratedParkMapView(
+            imageUrl: _catalog.mapImageUrl,
+            items: visibleItems,
+            selectedItemId: _selected?.id,
+            controller: _illustratedController,
+            onSelectItem: _onSelectItem,
+          )
+        else
+          _liveMap(visibleItems),
+
+        // Top floating search & category filter chips overlay
         Positioned(
-          top: 12,
-          left: 10,
-          child: Material(
-            color: Colors.white,
-            elevation: 4,
-            shape: const CircleBorder(),
-            child: IconButton(
-              tooltip: _mapExpanded ? 'Minimize map' : 'Expand map',
-              onPressed: () => setState(() => _mapExpanded = !_mapExpanded),
-              icon: Icon(
-                _mapExpanded
-                    ? Icons.fullscreen_exit_rounded
-                    : Icons.fullscreen_rounded,
-                color: _mapNavy,
+          top: overlayTop,
+          left: 0,
+          right: 0,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: ParkFloatingSearchHeader(
+                  controller: _searchController,
+                  onBack: () => Navigator.of(context).maybePop(),
+                  onChanged: (_) => setState(() {}),
+                  onClear: () {
+                    _searchController.clear();
+                    setState(() {});
+                  },
+                  onOpenFilters: _catalog.items.isNotEmpty
+                      ? _openFilterSheet
+                      : null,
+                  activeFilterCount: _activeFilterCount,
+                ),
+              ),
+              if (_catalog.availableCategories.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                ParkCategoryFilterBar(
+                  availableCategories: _catalog.availableCategories,
+                  categoryCounts: _catalog.categoryCounts,
+                  selectedCategories: _selectedCategories,
+                  totalCount: _catalog.items.length,
+                  onSelectAll: () => setState(_selectedCategories.clear),
+                  onToggleCategory: _toggleCategory,
+                  hasAnyActiveFilter: _hasAnyActiveFilter,
+                  onClearAll: _clearAllFilters,
+                ),
+              ],
+            ],
+          ),
+        ),
+
+        // Right-edge floating map controls
+        Positioned(
+          top: controlsTop,
+          right: 12,
+          child: Column(
+            children: [
+              if (_catalog.hasIllustratedMap) ...[
+                _mapControlButton(
+                  icon: _useIllustratedMap
+                      ? Icons.map_rounded
+                      : Icons.explore_rounded,
+                  tooltip: _useIllustratedMap
+                      ? 'Switch to Live GPS Map'
+                      : 'Switch to Park Guide Map',
+                  active: _useIllustratedMap,
+                  onTap: () => setState(() {
+                    _useIllustratedMap = !_useIllustratedMap;
+                  }),
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (!_useIllustratedMap) ...[
+                _mapControlButton(
+                  icon: Icons.my_location_rounded,
+                  tooltip: 'Center on my live location',
+                  loading: _gpsLoading,
+                  active: _visitorPosition != null,
+                  onTap: _locateVisitor,
+                ),
+                const SizedBox(height: 8),
+              ],
+              _mapControlButton(
+                icon: Icons.center_focus_strong_rounded,
+                tooltip: 'Reset park map view',
+                onTap: _resetMapView,
+              ),
+              const SizedBox(height: 8),
+              _zoomControlGroup(),
+              if (!isWide) ...[
+                const SizedBox(height: 8),
+                _mapControlButton(
+                  icon: _mapExpanded
+                      ? Icons.fullscreen_exit_rounded
+                      : Icons.fullscreen_rounded,
+                  tooltip: _mapExpanded ? 'Show park list' : 'Full-screen map',
+                  active: _mapExpanded,
+                  onTap: () => setState(() => _mapExpanded = !_mapExpanded),
+                ),
+              ],
+            ],
+          ),
+        ),
+
+        if (_routing)
+          Positioned(
+            top: controlsTop - 4,
+            left: 12,
+            right: 68,
+            child: const ClipRRect(
+              borderRadius: BorderRadius.all(Radius.circular(8)),
+              child: LinearProgressIndicator(
+                color: wonderlaCobalt,
+                minHeight: 3.5,
               ),
             ),
           ),
-        ),
-      Positioned(
-        top: 12,
-        right: 12,
-        child: Column(
-          children: [
-            _mapAction(
-              Icons.my_location_rounded,
-              _locateVisitor,
-              tooltip: 'Center on my live location',
-              loading: _gpsLoading,
-            ),
-          ],
-        ),
-      ),
-      if (_routing)
-        const Positioned(
-          top: 70,
-          left: 12,
-          right: 12,
-          child: LinearProgressIndicator(color: _mapNavy, minHeight: 3),
-        ),
-      if (_routeError != null)
-        Positioned(
-          top: 82,
-          left: 0,
-          right: 58,
-          child: _routeNotice(_routeError!),
-        )
-      else if (_locationMessage != null && !_gpsLoading)
-        Positioned(top: 82, left: 0, right: 58, child: _locationBanner()),
-      if (_route != null)
-        Positioned(left: 12, bottom: 12, child: _routeSummary(_route!)),
-    ],
-  );
 
-  Widget _mapAction(
-    IconData icon,
-    VoidCallback action, {
-    required String tooltip,
-    bool loading = false,
-  }) => Material(
-    color: Colors.white,
-    elevation: 4,
-    shape: const CircleBorder(),
-    child: IconButton(
-      tooltip: tooltip,
-      onPressed: loading ? null : action,
-      icon: loading
-          ? const SizedBox(
-              width: 19,
-              height: 19,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : Icon(icon, color: _mapNavy),
-    ),
-  );
+        if (_routeError != null)
+          Positioned(
+            top: controlsTop,
+            left: 12,
+            right: 66,
+            child: _routeNotice(_routeError!),
+          )
+        else if (_locationMessage != null && !_gpsLoading && !_useIllustratedMap)
+          Positioned(
+            top: controlsTop,
+            left: 12,
+            right: 66,
+            child: _locationBanner(),
+          ),
 
-  Widget _routeSummary(WalkingRoute route) {
-    final distance = _formatDistance(route.distanceMeters);
-    final minutes = (route.durationSeconds / 60).ceil();
-    return Material(
-      color: Colors.white,
-      elevation: 4,
-      borderRadius: BorderRadius.circular(14),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.directions_walk_rounded,
-              color: _mapNavy,
-              size: 18,
-            ),
-            const SizedBox(width: 7),
-            Text(
-              '$distance · about $minutes min',
-              style: const TextStyle(
-                color: _mapInk,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
+        if (_route != null && !_useIllustratedMap)
+          Positioned(
+            left: 12,
+            bottom: bottomOffset,
+            child: _routeSummary(_route!),
+          ),
+      ],
     );
   }
 
-  Widget _liveMap(List<Map<String, dynamic>> places) {
+  Widget _liveMap(List<ParkDiscoveryItem> visibleItems) {
     final initialCenter = _center;
     if (initialCenter == null) return _noCoordinates();
+
+    final mappedItems = visibleItems
+        .where((item) => item.position != null)
+        .toList(growable: false);
+    final showLabels = _showMarkerLabels || mappedItems.length <= 5;
+
     return FlutterMap(
+      key: const ValueKey('wonderla-live-map'),
       mapController: _controller,
       options: MapOptions(
         initialCenter: initialCenter,
         initialZoom: 16,
+        minZoom: 14.5,
+        maxZoom: 19,
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all,
+        ),
         onMapReady: () {
           _mapReady = true;
           final route = _route;
           if (route != null) {
             _fitRoute(route);
+          } else if (_selected?.position case final selectedPoint?) {
+            _controller.move(selectedPoint, 17.5);
           } else if (_visitorPosition case final position?) {
             _controller.move(position, 17);
+          }
+        },
+        onPositionChanged: (camera, _) {
+          _currentZoom = camera.zoom;
+          final shouldShow = camera.zoom >= 16.8;
+          if (shouldShow != _showMarkerLabels && mounted) {
+            setState(() => _showMarkerLabels = shouldShow);
           }
         },
       ),
@@ -528,33 +854,55 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
               Polyline(
                 points: route.points,
                 color: wonderlaBlue,
-                strokeWidth: 8,
+                strokeWidth: 7.5,
                 borderColor: Colors.white,
-                borderStrokeWidth: 2,
+                borderStrokeWidth: 2.2,
               ),
             ],
           ),
         MarkerLayer(
           markers: [
-            for (final place in places)
-              if (_placePosition(place) case final point?)
-                Marker(
-                  point: point,
-                  width: 46,
-                  height: 54,
-                  child: _placePin(place),
+            for (final item in mappedItems)
+              Marker(
+                point: item.position!,
+                width: 118,
+                height: (showLabels || item.id == _selected?.id) ? 76 : 56,
+                alignment: Alignment.topCenter,
+                child: WonderlaMapPin(
+                  item: item,
+                  selected: item.id == _selected?.id,
+                  showLabel: showLabels,
+                  onTap: () => _onSelectItem(item),
                 ),
+              ),
+            if (_selected != null &&
+                _selected!.position != null &&
+                !mappedItems.any((i) => i.id == _selected!.id))
+              Marker(
+                point: _selected!.position!,
+                width: 118,
+                height: 76,
+                alignment: Alignment.topCenter,
+                child: WonderlaMapPin(
+                  item: _selected!,
+                  selected: true,
+                  showLabel: true,
+                  onTap: () => _onSelectItem(_selected!),
+                ),
+              ),
             if (_visitorPosition case final point? when _isNearPark(point))
               Marker(
                 point: point,
-                width: 40,
-                height: 40,
-                child: _userLocationMarker(),
+                width: 42,
+                height: 42,
+                child: const WonderlaUserLocationPin(),
               ),
           ],
         ),
-        RichAttributionWidget(
-          attributions: const [
+        const RichAttributionWidget(
+          alignment: AttributionAlignment.bottomRight,
+          showFlutterMapAttribution: false,
+          attributions: [
             TextSourceAttribution('© OpenStreetMap contributors'),
           ],
         ),
@@ -562,164 +910,438 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     );
   }
 
-  Widget _placePin(Map<String, dynamic> place) {
-    final selected = _selected?['name'] == place['name'];
-    return GestureDetector(
-      onTap: () => _focusPlace(place),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 220),
-            width: selected ? 38 : 34,
-            height: selected ? 38 : 34,
-            decoration: BoxDecoration(
-              color: selected ? wonderlaGold : _mapNavy,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: const [
-                BoxShadow(color: Color(0x44071a3d), blurRadius: 7),
-              ],
-            ),
-            child: Icon(
-              _placeIcon(place['category']?.toString()),
-              color: selected ? wonderlaNavy : Colors.white,
-              size: 18,
+  Widget _mapControlButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+    bool loading = false,
+    bool active = false,
+  }) => Material(
+    color: active ? wonderlaNavy : Colors.white,
+    elevation: 4,
+    shadowColor: const Color(0x30102454),
+    shape: const CircleBorder(),
+    child: SizedBox(
+      width: 44,
+      height: 44,
+      child: IconButton(
+        tooltip: tooltip,
+        onPressed: loading ? null : onTap,
+        icon: loading
+            ? SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: active ? Colors.white : wonderlaCobalt,
+                ),
+              )
+            : Icon(
+                icon,
+                color: active ? wonderlaGold : wonderlaCobalt,
+                size: 21,
+              ),
+      ),
+    ),
+  );
+
+  Widget _zoomControlGroup() => Material(
+    color: Colors.white,
+    elevation: 4,
+    shadowColor: const Color(0x30102454),
+    borderRadius: BorderRadius.circular(22),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 42,
+          height: 38,
+          child: IconButton(
+            tooltip: 'Zoom in',
+            padding: EdgeInsets.zero,
+            onPressed: () => _zoomBy(0.8),
+            icon: const Icon(Icons.add_rounded, color: wonderlaNavy, size: 20),
+          ),
+        ),
+        Container(width: 24, height: 1, color: wonderlaBorder),
+        SizedBox(
+          width: 42,
+          height: 38,
+          child: IconButton(
+            tooltip: 'Zoom out',
+            padding: EdgeInsets.zero,
+            onPressed: () => _zoomBy(-0.8),
+            icon: const Icon(
+              Icons.remove_rounded,
+              color: wonderlaNavy,
+              size: 20,
             ),
           ),
-          const Icon(Icons.arrow_drop_down, color: _mapNavy, size: 18),
-        ],
+        ),
+      ],
+    ),
+  );
+
+  Widget _discoveryPanelContent(
+    List<ParkDiscoveryItem> visibleItems, {
+    required bool isWide,
+    ScrollController? scrollController,
+  }) {
+    final query = _searchController.text.trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!isWide)
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 9, bottom: 4),
+              width: 38,
+              height: 4.5,
+              decoration: BoxDecoration(
+                color: wonderlaBorder,
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(16, isWide ? 14 : 6, 14, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      query.isEmpty ? 'Explore this park' : 'Search results',
+                      style: const TextStyle(
+                        color: _mapInk,
+                        fontSize: 17.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${visibleItems.length} ${visibleItems.length == 1 ? 'place' : 'places'} available',
+                      style: const TextStyle(
+                        color: wonderlaMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _locationStatus(),
+            ],
+          ),
+        ),
+        if (_selected != null && _route == null) _selectedBanner(_selected!),
+        Expanded(
+          child: _route != null
+              ? _directionsPanel(_route!, scrollController: scrollController)
+              : visibleItems.isEmpty
+              ? _emptyFilterState(query)
+              : ListView.separated(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(12, 2, 12, 18),
+                  itemCount: visibleItems.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) =>
+                      _discoveryPlaceCard(visibleItems[index]),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _emptyFilterState(String query) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _hasAnyActiveFilter
+                  ? Icons.filter_alt_off_rounded
+                  : Icons.map_outlined,
+              color: wonderlaMuted,
+              size: 34,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              query.isNotEmpty
+                  ? 'No places match “$query”.'
+                  : _hasAnyActiveFilter
+                  ? 'No places match the active filters.'
+                  : 'No park locations are available yet.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: wonderlaNavy,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (_hasAnyActiveFilter) ...[
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: _clearAllFilters,
+                icon: const Icon(Icons.close_rounded, size: 17),
+                label: const Text('Clear all filters'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _userLocationMarker() => Stack(
-    alignment: Alignment.center,
-    children: [
-      Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: _mapNavy.withValues(alpha: .2),
-          shape: BoxShape.circle,
-        ),
+  Widget _selectedBanner(ParkDiscoveryItem item) => Container(
+    width: double.infinity,
+    margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+    decoration: BoxDecoration(
+      gradient: const LinearGradient(
+        colors: [wonderlaNavy, wonderlaCobalt],
       ),
-      Container(
-        width: 18,
-        height: 18,
-        decoration: BoxDecoration(
-          color: wonderlaBlue,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 3),
-          boxShadow: const [BoxShadow(color: Color(0x44071a3d), blurRadius: 7)],
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: wonderlaGold,
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: Icon(item.icon, color: wonderlaNavy, size: 19),
         ),
-      ),
-    ],
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                item.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13.5,
+                ),
+              ),
+              Text(
+                [
+                  item.category.label,
+                  if (item.waitTimeMinutes != null)
+                    '${item.waitTimeMinutes} min wait',
+                ].join(' · '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: .88),
+                  fontSize: 11.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(
+            foregroundColor: wonderlaGold,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            minimumSize: const Size(0, 32),
+          ),
+          onPressed: () => _openItemDetailSheet(item),
+          child: const Text(
+            'Details',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5),
+          ),
+        ),
+        IconButton(
+          tooltip: 'Clear selection',
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          padding: EdgeInsets.zero,
+          onPressed: () => setState(() => _selected = null),
+          icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+        ),
+      ],
+    ),
   );
 
-  IconData _placeIcon(String? category) {
-    final value = (category ?? '').toLowerCase();
-    if (value.contains('food') ||
-        value.contains('restaurant') ||
-        value.contains('shop')) {
-      return Icons.restaurant_rounded;
-    }
-    if (value.contains('facility') ||
-        value.contains('first aid') ||
-        value.contains('toilet')) {
-      return Icons.local_hospital_outlined;
-    }
-    if (value.contains('entrance')) return Icons.login_rounded;
-    return Icons.attractions_rounded;
-  }
-
-  Widget _placeTray(List<Map<String, dynamic>> places) {
-    final query = _searchController.text.trim().toLowerCase();
-    final visiblePlaces = query.isEmpty
-        ? places
-        : places
-              .where((place) {
-                final name = place['name']?.toString().toLowerCase() ?? '';
-                final category =
-                    place['category']?.toString().toLowerCase() ?? '';
-                return name.contains(query) || category.contains(query);
-              })
-              .toList(growable: false);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: wonderlaBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x12071a3d),
-            blurRadius: 12,
-            offset: Offset(0, 4),
+  Widget _discoveryPlaceCard(ParkDiscoveryItem item) {
+    final selected = _selected?.id == item.id;
+    final distance = _distanceToVisitor(item);
+    return Material(
+      color: selected ? const Color(0xFFF0F5FF) : Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () => _onSelectItem(item),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? wonderlaCobalt : wonderlaBorder,
+              width: selected ? 1.5 : 1,
+            ),
           ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 14, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        query.isEmpty ? 'Explore this park' : 'Search results',
+          child: Row(
+            children: [
+              _itemThumbnail(item),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _mapInk,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Container(
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: item.category.color,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            [
+                              item.category.label,
+                              ?item.cuisine,
+                              ?distance,
+                            ].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: wonderlaMuted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (item.kioskBookingEnabled) ...[
+                      const SizedBox(height: 4),
+                      const Row(
+                        children: [
+                          Icon(
+                            Icons.confirmation_number_outlined,
+                            size: 13,
+                            color: wonderlaCobalt,
+                          ),
+                          SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              'Kiosk slot booking',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: wonderlaCobalt,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (item.waitTimeMinutes != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: wonderlaWaitTimeColor(item.waitTimeMinutes!),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${item.waitTimeMinutes}m',
                         style: const TextStyle(
-                          color: _mapInk,
-                          fontSize: 17,
+                          color: Colors.white,
+                          fontSize: 11,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        '${visiblePlaces.length} ${visiblePlaces.length == 1 ? 'place' : 'places'} available',
-                        style: const TextStyle(
-                          color: wonderlaMuted,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                _locationStatus(),
-              ],
-            ),
-          ),
-          if (_selected != null) _placeInfo(_selected!),
-          Expanded(
-            child: _route != null
-                ? _directionsPanel(_route!)
-                : visiblePlaces.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        query.isEmpty
-                            ? 'No park locations are available yet.'
-                            : 'No places match “${_searchController.text.trim()}”.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: wonderlaMuted),
-                      ),
                     ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
-                    itemCount: visiblePlaces.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 4),
-                    itemBuilder: (context, index) =>
-                        _placeListRow(visiblePlaces[index]),
-                  ),
+                  if (item.hasGpsCoordinates)
+                    Padding(
+                      padding: EdgeInsets.only(
+                        top: item.waitTimeMinutes != null ? 5 : 0,
+                      ),
+                      child: _routing && selected
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              Icons.directions_walk_rounded,
+                              color: selected ? _mapNavy : wonderlaCobalt,
+                              size: 19,
+                            ),
+                    )
+                  else if (item.waitTimeMinutes == null)
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: wonderlaMuted,
+                      size: 20,
+                    ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+
+  Widget _itemThumbnail(ParkDiscoveryItem item) {
+    final fallback = Container(
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+        color: item.category.tintColor,
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: Icon(item.icon, color: item.category.color, size: 22),
+    );
+    if (item.imageUrl.isEmpty) return fallback;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(13),
+      child: SizedBox(
+        width: 46,
+        height: 46,
+        child: Image.network(
+          item.imageUrl,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => fallback,
+        ),
       ),
     );
   }
@@ -741,9 +1363,9 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         ? 'Park map'
         : 'GPS off';
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: .09),
+        color: color.withValues(alpha: .10),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -756,8 +1378,8 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
               child: CircularProgressIndicator(strokeWidth: 2, color: color),
             )
           else
-            Icon(Icons.my_location_rounded, size: 14, color: color),
-          const SizedBox(width: 6),
+            Icon(Icons.my_location_rounded, size: 13.5, color: color),
+          const SizedBox(width: 5),
           Text(
             label,
             style: TextStyle(
@@ -771,84 +1393,9 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     );
   }
 
-  Widget _placeListRow(Map<String, dynamic> place) {
-    final selected = _selected?['name'] == place['name'];
-    final distance = _distanceToVisitor(place);
-    return Material(
-      color: selected ? const Color(0xfff2f6ff) : Colors.white,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: () => _focusPlace(place),
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-          child: Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: wonderlaCream,
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: Icon(
-                  _placeIcon(place['category']?.toString()),
-                  color: _mapNavy,
-                  size: 21,
-                ),
-              ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      place['name']?.toString() ?? 'Park place',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: _mapInk,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      [
-                        place['category']?.toString() ?? 'Park place',
-                        ?distance,
-                      ].join(' · '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: wonderlaMuted,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (_routing && selected)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              else
-                Icon(
-                  Icons.directions_walk_rounded,
-                  color: selected ? _mapNavy : wonderlaMuted,
-                  size: 20,
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String? _distanceToVisitor(Map<String, dynamic> place) {
+  String? _distanceToVisitor(ParkDiscoveryItem item) {
     final from = _visitorPosition;
-    final to = _placePosition(place);
+    final to = item.position;
     if (from == null || to == null) return null;
     final meters = Geolocator.distanceBetween(
       from.latitude,
@@ -859,49 +1406,55 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     return '${_formatDistance(meters)} away';
   }
 
-  Widget _searchBox() => TextField(
-    controller: _searchController,
-    textInputAction: TextInputAction.search,
-    onChanged: (_) => setState(() {}),
-    decoration: InputDecoration(
-      hintText: 'Search rides, shops, restaurants…',
-      prefixIcon: const Icon(Icons.search_rounded, color: _mapNavy),
-      suffixIcon: _searchController.text.isEmpty
-          ? null
-          : IconButton(
-              tooltip: 'Clear search',
-              onPressed: () {
-                _searchController.clear();
-                setState(() {});
-              },
-              icon: const Icon(Icons.close_rounded),
+  Widget _routeSummary(WalkingRoute route) {
+    final distance = _formatDistance(route.distanceMeters);
+    final minutes = (route.durationSeconds / 60).ceil();
+    return Material(
+      color: wonderlaNavy,
+      elevation: 6,
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.directions_walk_rounded,
+              color: wonderlaGold,
+              size: 19,
             ),
-      filled: true,
-      fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(vertical: 10),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(17),
-        borderSide: BorderSide.none,
+            const SizedBox(width: 7),
+            Text(
+              '$distance · about $minutes min',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(17),
-        borderSide: const BorderSide(color: wonderlaNavy),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(17),
-        borderSide: const BorderSide(color: _mapNavy, width: 1.5),
-      ),
-    ),
-  );
+    );
+  }
 
-  Widget _directionsPanel(WalkingRoute route) {
+  Widget _directionsPanel(
+    WalkingRoute route, {
+    ScrollController? scrollController,
+  }) {
     final distance = _formatDistance(route.distanceMeters);
     final minutes = (route.durationSeconds / 60).ceil();
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      controller: scrollController,
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 18),
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 2, 0, 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFE8F0FE),
+            borderRadius: BorderRadius.circular(14),
+          ),
           child: Row(
             children: [
               Icon(
@@ -927,7 +1480,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
                   _selected = null;
                   _routeError = null;
                 }),
-                icon: const Icon(Icons.close_rounded),
+                icon: const Icon(Icons.close_rounded, color: wonderlaNavy),
               ),
             ],
           ),
@@ -936,7 +1489,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
           ListTile(
             dense: true,
             visualDensity: VisualDensity.compact,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 2),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
             leading: CircleAvatar(
               radius: 14,
               backgroundColor: wonderlaCream,
@@ -966,95 +1519,62 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
       ? '${(meters / 1000).toStringAsFixed(1)} km'
       : '${meters.round()} m';
 
-  Widget _routeNotice(String message) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
-    decoration: BoxDecoration(
-      color: wonderlaWhite,
-      borderRadius: BorderRadius.circular(13),
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.info_outline, color: wonderlaNavy, size: 18),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            message,
-            style: const TextStyle(color: wonderlaNavy, fontSize: 12),
+  Widget _routeNotice(String message) => Material(
+    color: Colors.white,
+    elevation: 4,
+    borderRadius: BorderRadius.circular(14),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, color: wonderlaCobalt, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: wonderlaNavy, fontSize: 12),
+            ),
           ),
-        ),
-        IconButton(
-          onPressed: () => setState(() => _routeError = null),
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.close, size: 18),
-        ),
-      ],
+          IconButton(
+            onPressed: () => setState(() => _routeError = null),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close_rounded, size: 17),
+          ),
+        ],
+      ),
     ),
   );
 
-  Widget _placeInfo(Map<String, dynamic> place) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-    decoration: BoxDecoration(
-      color: _mapNavy,
-      borderRadius: BorderRadius.circular(15),
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.place, color: Colors.white, size: 24),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                place['name']?.toString() ?? '',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                [
-                  place['category'],
-                  if (place['lat'] != null && place['lng'] != null)
-                    '${place['lat']}, ${place['lng']}',
-                ].whereType<Object>().map((e) => e.toString()).join(' · '),
-                style: const TextStyle(color: wonderlaWhite, fontSize: 11),
-              ),
-            ],
+  Widget _locationBanner() => Material(
+    color: Colors.white.withValues(alpha: .96),
+    elevation: 3,
+    borderRadius: BorderRadius.circular(14),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, color: wonderlaCobalt, size: 17),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _visitorPosition == null
+                  ? 'The park map is open. ${_locationMessage ?? 'Allow location access to show your live position and get directions.'}'
+                  : _locationMessage ?? 'Live location is unavailable.',
+              style: const TextStyle(color: wonderlaNavy, fontSize: 11.5),
+            ),
           ),
-        ),
-        IconButton(
-          onPressed: () => setState(() => _selected = null),
-          icon: const Icon(Icons.close, color: Colors.white),
-        ),
-      ],
+          IconButton(
+            onPressed: () => setState(() => _locationMessage = null),
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.close_rounded, size: 16),
+          ),
+        ],
+      ),
     ),
   );
 
-  Widget _locationBanner() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-    color: wonderlaWhite,
-    child: Row(
-      children: [
-        const Icon(Icons.info_outline, color: wonderlaNavy, size: 18),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            _visitorPosition == null
-                ? 'The park map is open. ${_locationMessage ?? 'Allow location access to show your live position and get directions.'}'
-                : _locationMessage ?? 'Live location is unavailable.',
-            style: const TextStyle(color: wonderlaNavy, fontSize: 12),
-          ),
-        ),
-      ],
-    ),
-  );
   Widget _noCoordinates() => Container(
     color: wonderlaWhite,
     child: Center(

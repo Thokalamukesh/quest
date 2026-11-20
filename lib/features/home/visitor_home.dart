@@ -4,10 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../cms/cms_api.dart';
+import '../cms/cms_screen.dart';
+import '../park_map/models/park_discovery_item.dart';
+import '../park_map/widgets/park_filter_bar.dart';
+import '../park_map/widgets/park_map_marker.dart';
+import '../park_map/widgets/park_place_detail_sheet.dart';
+import '../../shared/wonderla_palette.dart';
 import 'configured_park_map_screen.dart';
 import 'home_shortcut_catalog.dart';
-import '../cms/cms_screen.dart';
-import '../../shared/wonderla_palette.dart';
 
 part 'visitor_section_screen.dart';
 
@@ -193,8 +197,11 @@ class _VisitorHomeState extends State<VisitorHome> {
   void _openParkMap(Map<String, dynamic> cfg) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) =>
-            ConfiguredParkMapScreen(config: cfg, baseUrl: _api.baseUrl),
+        builder: (_) => ConfiguredParkMapScreen(
+          config: cfg,
+          baseUrl: _api.baseUrl,
+          api: _api,
+        ),
       ),
     );
   }
