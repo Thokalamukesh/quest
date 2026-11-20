@@ -1,5 +1,5 @@
 import 'dart:typed_data';
-import 'dart:ui' show ImageByteFormat;
+import 'dart:ui' show ImageByteFormat, PointerDeviceKind;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -38,13 +38,17 @@ bool _hasValidMapCoordinates(Map<String, dynamic> place) {
 }
 
 class CmsScreen extends StatefulWidget {
-  const CmsScreen({super.key});
+  const CmsScreen({super.key, this.api, this.initialUser});
+
+  final CmsApi? api;
+  final Map<String, dynamic>? initialUser;
+
   @override
   State<CmsScreen> createState() => _CmsScreenState();
 }
 
 class _CmsScreenState extends State<CmsScreen> {
-  final _api = CmsApi();
+  late final CmsApi _api = widget.api ?? CmsApi();
   Map<String, dynamic>? _user;
   bool _checking = true;
   String? _error;
@@ -52,7 +56,12 @@ class _CmsScreenState extends State<CmsScreen> {
   @override
   void initState() {
     super.initState();
-    _restoreSession();
+    if (widget.initialUser != null) {
+      _user = Map<String, dynamic>.from(widget.initialUser!);
+      _checking = false;
+    } else {
+      _restoreSession();
+    }
   }
 
   Future<void> _restoreSession() async {
@@ -72,8 +81,45 @@ class _CmsScreenState extends State<CmsScreen> {
   @override
   Widget build(BuildContext context) {
     if (_checking) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: _brandNavy)),
+      return Scaffold(
+        backgroundColor: wonderlaCream,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: wonderlaWhite,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: wonderlaBorder),
+                  boxShadow: [
+                    BoxShadow(
+                      color: wonderlaNavy.withValues(alpha: 0.08),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(14),
+                child: const CircularProgressIndicator(
+                  strokeWidth: 2.6,
+                  color: _brandNavy,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Connecting to Wonderla CMS…',
+                style: TextStyle(
+                  color: _ink,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
     if (_user == null) {
@@ -99,26 +145,216 @@ class _CmsScreenState extends State<CmsScreen> {
   }
 }
 
+enum _CmsBannerTone { info, success, warning, error }
+
+class _CmsAlertBanner extends StatelessWidget {
+  const _CmsAlertBanner({
+    required this.message,
+    this.tone = _CmsBannerTone.info,
+    this.actionLabel,
+    this.onAction,
+    this.onDismiss,
+  });
+
+  final String message;
+  final _CmsBannerTone tone;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+  final VoidCallback? onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final (Color bg, Color border, Color fg, IconData icon) = switch (tone) {
+      _CmsBannerTone.success => (
+        const Color(0xFFECF9F2),
+        const Color(0xFFBBE7CF),
+        wonderlaSuccess,
+        Icons.check_circle_rounded,
+      ),
+      _CmsBannerTone.warning => (
+        const Color(0xFFFFF8E6),
+        const Color(0xFFF6D98B),
+        wonderlaWarning,
+        Icons.warning_amber_rounded,
+      ),
+      _CmsBannerTone.error => (
+        const Color(0xFFFDF0F2),
+        const Color(0xFFF3C4CC),
+        wonderlaFlagRed,
+        Icons.error_outline_rounded,
+      ),
+      _CmsBannerTone.info => (
+        const Color(0xFFEEF4FF),
+        const Color(0xFFC8DAFA),
+        _brandNavy,
+        Icons.info_outline_rounded,
+      ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(icon, color: fg, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: fg,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: onAction,
+              style: TextButton.styleFrom(
+                foregroundColor: fg,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                visualDensity: VisualDensity.compact,
+              ),
+              child: Text(
+                actionLabel!,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+          if (onDismiss != null)
+            IconButton(
+              onPressed: onDismiss,
+              tooltip: 'Dismiss',
+              icon: Icon(Icons.close_rounded, size: 18, color: fg),
+              visualDensity: VisualDensity.compact,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CmsPillBadge extends StatelessWidget {
+  const _CmsPillBadge({
+    required this.label,
+    required this.foreground,
+    required this.background,
+    this.icon,
+    this.borderColor,
+  });
+
+  final String label;
+  final Color foreground;
+  final Color background;
+  final IconData? icon;
+  final Color? borderColor;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    decoration: BoxDecoration(
+      color: background,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(
+        color: borderColor ?? foreground.withValues(alpha: 0.16),
+      ),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (icon != null) ...[
+          Icon(icon, size: 13, color: foreground),
+          const SizedBox(width: 5),
+        ],
+        Flexible(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              color: foreground,
+              height: 1.1,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class _EmptyCard extends StatelessWidget {
-  const _EmptyCard(this.title, this.subtitle);
+  const _EmptyCard(
+    this.title,
+    this.subtitle, {
+    this.icon = Icons.inbox_outlined,
+    this.actionLabel,
+    this.onAction,
+  });
+
   final String title;
   final String subtitle;
+  final IconData icon;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
   @override
   Widget build(BuildContext context) => Card(
-    color: Colors.white,
+    color: wonderlaWhite,
     child: Padding(
-      padding: const EdgeInsets.all(28),
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 34),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.inbox_outlined, size: 38, color: _brandNavy),
-          const SizedBox(height: 10),
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: wonderlaNavy),
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEEF4FF),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Icon(icon, size: 28, color: _brandNavy),
           ),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: _ink,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: wonderlaMuted,
+                fontSize: 13.5,
+                height: 1.45,
+              ),
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: onAction,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(actionLabel!),
+            ),
+          ],
         ],
       ),
     ),
