@@ -19,3 +19,4 @@ npm-debug.log*
 
 /.next-backup/
 /.next-dev/
+*.tsbuildinfo
