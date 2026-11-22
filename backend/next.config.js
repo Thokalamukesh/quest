@@ -1,6 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
   serverExternalPackages: ["genkit", "@genkit-ai/google-genai"],
   // Keep `next dev` output separate from `next build`; sharing `.next` can
   // leave stale server chunks behind when switching between the two modes.

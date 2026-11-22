@@ -72,6 +72,7 @@ public; all writes require a valid session with the right role.
 | GET    | `/users`                 | super | List users              |
 | POST   | `/users`                 | super | Create a user           |
 | DELETE | `/users/<username>`      | super | Delete a user           |
+| POST   | `/ai/chat`               | —     | Ask Chiku Genkit stream |
 
 Auth levels: **—** public · **owner** = superadmin or the park's own user ·
 **super** = superadmin only. (`PUT /parks/<slug>` is **owner**.)
@@ -82,14 +83,8 @@ See `_lib/types.ts`. Each park has: `rides`, `events`, `liveWaitTimes`,
 `waveRainDance`, `safetyHygiene`, `maintenanceLog`, `parkMap`, `dining`,
 `rideGuidelines`, plus `name` / `location` / `active`.
 
-## Notes / assumptions
+## Notes
 
-- Relies on the parent app's Tailwind custom colors `bg-blue` / `bg-yellow`
-  and the `@/assets/svgs/Icons` `LeftArrow`, both already used by the original
-  code. Admin UI uses only default Tailwind colors.
-- Images are referenced by URL (paste a URL in admin). Empty URL → the
-  existing yellow placeholder is shown.
-- "Refresh" on Live Wait Times & Maintenance Log now re-fetches the park
-  config from the API.
-- `main.tsx` at the module root is a deprecated stub (could not be deleted in
-  this workspace); it is not imported anywhere.
+- All endpoints under `app/` are pure TypeScript Next.js Route Handlers (no React UI files).
+- Set `GEMINI_API_KEY` in Vercel Environment Variables to enable live Gemini 2.5 Flash tool calling for Ask Chiku (otherwise the smart park-tools streaming fallback runs automatically).
+- Connect a private Vercel Blob store (`BLOB_READ_WRITE_TOKEN` / `BLOB_STORE_ID`) so CMS edits and uploads persist in production.
