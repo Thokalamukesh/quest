@@ -197,10 +197,124 @@ class WonderlaAiService {
     yield* _localToolCallingStream(message: message, parkConfig: parkConfig);
   }
 
+  static String _pickVariant(String seed, List<String> options) {
+    var hash = 0;
+    for (final code in seed.codeUnits) {
+      hash = (hash * 31 + code) & 0x7fffffff;
+    }
+    return options[hash % options.length];
+  }
+
+  /// Generates playful, Wonderla-only mascot banter for casual, personal, or
+  /// silly questions (e.g. "Hi Chiku had your lunch?") instead of dumping tools.
+  static String? tryChikuBanterReply({
+    required String message,
+    required Map<String, dynamic> parkConfig,
+  }) {
+    final lower = message.toLowerCase().trim();
+    final parkName = parkConfig['name']?.toString().trim().isNotEmpty == true
+        ? parkConfig['name'].toString().trim()
+        : 'Wonderla';
+    final diningList = _mapList(parkConfig['dining']);
+    final ridesList = _mapList(parkConfig['rides']);
+    final waveList = _mapList(parkConfig['waveRainDance']);
+    final sampleDining =
+        diningList.firstOrNull?['name']?.toString().trim().isNotEmpty == true
+        ? diningList.first['name'].toString().trim()
+        : 'Park View Restaurant';
+    final sampleThrill =
+        ridesList.firstOrNull?['title']?.toString().trim().isNotEmpty == true
+        ? ridesList.first['title'].toString().trim()
+        : 'Recoil';
+    final sampleWater =
+        waveList.firstOrNull?['title']?.toString().trim().isNotEmpty == true
+        ? waveList.first['title'].toString().trim()
+        : 'Wave Pool';
+
+    final hasExplicitParkRequest = RegExp(
+      r'(plan|itinerary|schedule|next \d|suggest|recommend|wait|queue|shortest|ride|coaster|kid|child|height|\d{2,3}\s*cm|direction|map|route|how to reach|where is|where can i|menu|veg|non-veg|restaurant|dining|biryani|price|wave pool|rain disco|show|event|timing|ticket|locker|swimwear|safety|guideline|maintenance)',
+    ).hasMatch(lower);
+
+    final asksChikuPersonalMeal =
+        RegExp(
+          r'(had your|have you had|did you eat|did u eat|had lunch|had breakfast|had dinner|had food|had tea|had coffee|u had|you eaten|are you hungry|eat anything|eating anything)',
+        ).hasMatch(lower) &&
+        !RegExp(
+          r'(where|best|suggest|recommend|veg|menu|restaurant|direction|map|near)',
+        ).hasMatch(lower);
+
+    if (asksChikuPersonalMeal) {
+      return _pickVariant(lower, [
+        "Haha, I tried sneaking a crispy dosa near **$sampleWater**, got splashed by a giant wave, and now I'm running purely on **$sampleThrill** adrenaline! 😄 If *you're* hungry though, **$sampleDining** at **$parkName** has great food — want veg or non-veg suggestions?",
+        "I had two loops of **$sampleThrill** for starters and a splash of **$sampleWater** for dessert — mascot diet! 😂 Seriously though, if your tummy's rumbling, ask me for the best food or directions to **$sampleDining** inside **$parkName**!",
+      ]);
+    }
+
+    if (hasExplicitParkRequest) return null;
+
+    if (RegExp(r'(joke|make me laugh|funny|comedy|laugh)').hasMatch(lower)) {
+      return _pickVariant(lower, [
+        "Why did the roller coaster at **$parkName** win Employee of the Month? Because it had way too many ups and downs and STILL never lost its track! 🎢😄 Want me to check which thrill ride has the shortest wait right now?",
+        "Why did I bring sunglasses to the **$sampleWater**? Because **$parkName** rides are *way* too cool! 😎 Ready to plan your next rides or grab a bite at **$sampleDining**?",
+      ]);
+    }
+
+    if (RegExp(
+      r'(marry|married|wife|husband|girlfriend|boyfriend|\bgf\b|\bbf\b|single|love you|kiss|date me)',
+    ).hasMatch(lower)) {
+      return "Haha, slow down! My mascot heart is already taken by **$sampleThrill**, cotton candy, and the **$sampleWater**! 🎢💛 Let's channel that energy into a super fun day at **$parkName** — want a 3-hour ride plan?";
+    }
+
+    if (RegExp(r'(tired|sleepy|bored|boring|exhausted|hot|sweating)').hasMatch(lower)) {
+      return "Feeling low on battery at **$parkName**? Two official Chiku prescriptions: cool off at **$sampleWater** or wake right up on **$sampleThrill**! ⚡ Want me to check live wait times or nearby snack spots?";
+    }
+
+    if (RegExp(
+      r'(who are you|what is your name|your name|how old|your age|birthday|are you real|are you a bot|are you ai|where do you live|favorite ride|can you swim)',
+    ).hasMatch(lower)) {
+      return "I'm **Chiku**, **$parkName**'s unofficial Chief Fun Officer! 🎢 I live somewhere between **$sampleThrill** and **$sampleWater**, and my superpower is knowing live wait times, kid-height rides, yummy park food, and map directions. What should we explore first?";
+    }
+
+    if (RegExp(
+      r'(thank|thx|awesome|super|nice|cute|good job|good boy|great|cool|bye|goodbye|see you|tata)',
+    ).hasMatch(lower)) {
+      return "Aww, you're making my mascot ears blush! 😄 Have an unforgettable, splash-filled day at **$parkName** — tap **Ask Chiku** anytime you need rides, queues, food, or directions! 🎢✨";
+    }
+
+    if (RegExp(
+      r"^(hi+|hey+|hello+|hlo+|yo+|namaste|hola|sup|wassup|what'?s up|good morning|good afternoon|good evening|how are you|how r u|how are u|chiku|chicku)[\s!.,?]*((chiku|chicku|buddy|bro|friend|there|how are you|how r u)[\s!.,?]*)*$",
+    ).hasMatch(lower)) {
+      return _pickVariant(lower, [
+        "Heyy! **Chiku** reporting live from **$parkName** with 100% roller-coaster energy! 🎢 Ask me to plan your rides, filter by kid height (like **110 cm**), find short queues, or guide you to **$sampleDining**!",
+        "Hi there! I just survived a giant splash at **$sampleWater** and I'm ready to be your **$parkName** guide! 😄 Want thrill rides, family picks, live wait times, or tasty food directions?",
+      ]);
+    }
+
+    return null;
+  }
+
   Stream<AiStreamEvent> _localToolCallingStream({
     required String message,
     required Map<String, dynamic> parkConfig,
   }) async* {
+    final banter = tryChikuBanterReply(
+      message: message,
+      parkConfig: parkConfig,
+    );
+    if (banter != null) {
+      final words = RegExp(r'\S+\s*')
+          .allMatches(banter)
+          .map((m) => m.group(0)!)
+          .toList();
+      for (var i = 0; i < words.length; i += 4) {
+        final end = (i + 4).clamp(0, words.length);
+        yield AiTextChunkEvent(words.sublist(i, end).join());
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+      yield const AiDoneEvent(mode: 'local_tools');
+      return;
+    }
+
     final lower = message.toLowerCase();
     final parkName = parkConfig['name']?.toString().trim().isNotEmpty == true
         ? parkConfig['name'].toString().trim()
@@ -226,7 +340,7 @@ class WonderlaAiService {
     ).hasMatch(lower);
     final asksRides =
         RegExp(
-          r'(ride|coaster|kid|child|thrill|water|height|cm|\bdo\b)',
+          r'(ride|coaster|kid|child|thrill|water|height|cm)',
         ).hasMatch(lower) ||
         asksPlan;
     final asksWait =
@@ -472,7 +586,10 @@ class WonderlaAiService {
 
     if (parts.isEmpty) {
       parts.add(
-        "Hi! I'm **Chiku**, your **$parkName** buddy! Ask me things like **\"Which rides for my 110 cm kid & plan next 3 hours?\"**, **\"Shortest wait rides\"**, or **\"Directions to Park View Restaurant\"**.",
+        _pickVariant(lower, [
+          "Haha, you stumped me! My little mascot brain is 99% roller-coaster loops and 1% Wave Pool splashes — I only know **$parkName** secrets! 🎢 Ask me to plan your rides, check live wait times, find kid-safe rides (like **110 cm**), or guide you to park restaurants!",
+          "Whoa, that's way above my roller-coaster pay grade! 😄 I'm **Chiku**, and I only talk **$parkName** — thrill rides, water splashes, shortest queues, yummy park food, and map directions. What shall we do next?",
+        ]),
       );
     }
 

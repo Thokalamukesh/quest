@@ -389,11 +389,98 @@ async function emitChunksSlowly(
   }
 }
 
+function pickVariant(seed: string, options: string[]): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return options[hash % options.length];
+}
+
+function tryChikuBanterReply(cfg: ParkConfig, message: string): string | null {
+  const lower = message.toLowerCase().trim();
+  const sampleDining = cfg.dining?.[0]?.name ?? "Park View Restaurant";
+  const sampleThrill =
+    cfg.rides?.find((r) => classifyRideCategory(r) === "thrill")?.title ??
+    cfg.rides?.[0]?.title ??
+    "Recoil";
+  const sampleWater =
+    cfg.waveRainDance?.[0]?.title ??
+    cfg.rides?.find((r) => classifyRideCategory(r) === "water")?.title ??
+    "Wave Pool";
+
+  // Check if the visitor is actually asking for park recommendations/info
+  const hasExplicitParkRequest =
+    /(plan|itinerary|schedule|next \d|suggest|recommend|wait|queue|shortest|ride|coaster|kid|child|height|\d{2,3}\s*cm|direction|map|route|how to reach|where is|where can i|menu|veg|non-veg|restaurant|dining|biryani|price|wave pool|rain disco|show|event|timing|ticket|locker|swimwear|safety|guideline|maintenance)/.test(
+      lower,
+    );
+
+  // Personal meal banter aimed at Chiku ("hi chiku had your lunch?", "did you eat?")
+  const asksChikuPersonalMeal =
+    /(had your|have you had|did you eat|did u eat|had lunch|had breakfast|had dinner|had food|had tea|had coffee|u had|you eaten|are you hungry|eat anything|eating anything)/.test(
+      lower,
+    ) && !/(where|best|suggest|recommend|veg|menu|restaurant|direction|map|near)/.test(lower);
+
+  if (asksChikuPersonalMeal) {
+    return pickVariant(lower, [
+      `Haha, I tried sneaking a crispy dosa near **${sampleWater}**, got splashed by a giant wave, and now I'm running purely on **${sampleThrill}** adrenaline! 😄 If *you're* hungry though, **${sampleDining}** at **${cfg.name}** has great food — want veg or non-veg suggestions?`,
+      `I had two loops of **${sampleThrill}** for starters and a splash of **${sampleWater}** for dessert — mascot diet! 😂 Seriously though, if your tummy's rumbling, ask me for the best food or directions to **${sampleDining}** inside **${cfg.name}**!`,
+    ]);
+  }
+
+  if (hasExplicitParkRequest) return null;
+
+  // Jokes / humor
+  if (/(joke|make me laugh|funny|comedy|laugh)/.test(lower)) {
+    return pickVariant(lower, [
+      `Why did the roller coaster at **${cfg.name}** win Employee of the Month? Because it had way too many ups and downs and STILL never lost its track! 🎢😄 Want me to check which thrill ride has the shortest wait right now?`,
+      `Why did I bring sunglasses to the **${sampleWater}**? Because **${cfg.name}** rides are *way* too cool! 😎 Ready to plan your next rides or grab a bite at **${sampleDining}**?`,
+    ]);
+  }
+
+  // Love / marriage / relationship / silly personal questions
+  if (/(marry|married|wife|husband|girlfriend|boyfriend|\bgf\b|\bbf\b|single|love you|kiss|date me)/.test(lower)) {
+    return `Haha, slow down! My mascot heart is already taken by **${sampleThrill}**, cotton candy, and the **${sampleWater}**! 🎢💛 Let's channel that energy into a super fun day at **${cfg.name}** — want a 3-hour ride plan?`;
+  }
+
+  // Tired / sleepy / bored
+  if (/(tired|sleepy|bored|boring|exhausted|hot|sweating)/.test(lower)) {
+    return `Feeling low on battery at **${cfg.name}**? Two official Chiku prescriptions: cool off at **${sampleWater}** or wake right up on **${sampleThrill}**! ⚡ Want me to check live wait times or nearby snack spots?`;
+  }
+
+  // Identity / age / bot questions
+  if (/(who are you|what is your name|your name|how old|your age|birthday|are you real|are you a bot|are you ai|where do you live|favorite ride|can you swim)/.test(lower)) {
+    return `I'm **Chiku**, **${cfg.name}**'s unofficial Chief Fun Officer! 🎢 I live somewhere between **${sampleThrill}** and **${sampleWater}**, and my superpower is knowing live wait times, kid-height rides, yummy park food, and map directions. What should we explore first?`;
+  }
+
+  // Thanks / compliments / goodbye
+  if (/(thank|thx|awesome|super|nice|cute|good job|good boy|great|cool|bye|goodbye|see you|tata)/.test(lower)) {
+    return `Aww, you're making my mascot ears blush! 😄 Have an unforgettable, splash-filled day at **${cfg.name}** — tap **Ask Chiku** anytime you need rides, queues, food, or directions! 🎢✨`;
+  }
+
+  // Greetings & how are you
+  if (/^(hi+|hey+|hello+|hlo+|yo+|namaste|hola|sup|wassup|what'?s up|good morning|good afternoon|good evening|how are you|how r u|how are u|chiku|chicku)[\s!.,?]*((chiku|chicku|buddy|bro|friend|there|how are you|how r u)[\s!.,?]*)*$/.test(lower)) {
+    return pickVariant(lower, [
+      `Heyy! **Chiku** reporting live from **${cfg.name}** with 100% roller-coaster energy! 🎢 Ask me to plan your rides, filter by kid height (like **110 cm**), find short queues, or guide you to **${sampleDining}**!`,
+      `Hi there! I just survived a giant splash at **${sampleWater}** and I'm ready to be your **${cfg.name}** guide! 😄 Want thrill rides, family picks, live wait times, or tasty food directions?`,
+    ]);
+  }
+
+  return null;
+}
+
 async function runSmartToolFallback(
   cfg: ParkConfig,
   message: string,
   onEvent: (event: AiStreamEvent) => void,
 ) {
+  const banterReply = tryChikuBanterReply(cfg, message);
+  if (banterReply) {
+    await emitChunksSlowly(banterReply, onEvent);
+    onEvent({ type: "done", mode: "smart_tools" });
+    return;
+  }
+
   const lower = message.toLowerCase();
   const suggestedPlaces = new Map<string, AiSuggestedPlace>();
 
@@ -403,9 +490,9 @@ async function runSmartToolFallback(
   const hours = hoursMatch ? Math.min(Math.max(Number(hoursMatch[1]), 1), 8) : undefined;
 
   const asksPlan = /(plan|itinerary|today|schedule|next \d|suggest|recommend|start)/.test(lower);
-  const asksRides = /(ride|coaster|kid|child|thrill|water|height|cm|\bdo\b)/.test(lower) || asksPlan;
+  const asksRides = /(ride|coaster|kid|child|thrill|water|height|cm)/.test(lower) || asksPlan;
   const asksWait = /(wait|queue|crowd|shortest|fast|quick|busy)/.test(lower) || asksPlan;
-  const asksFood = /(food|eat|dining|restaurant|lunch|breakfast|veg|biryani|dosa|menu|snack|hungry)/.test(lower);
+  const asksFood = /(food|eat|dining|restaurant|lunch|breakfast|dinner|veg|biryani|dosa|menu|snack|hungry)/.test(lower);
   const asksMap = /(map|direction|where|locate|route|find|how to reach|how do i get|way to)/.test(lower);
   const asksShows = /(wave|rain|show|event|parade|laser|timing|time)/.test(lower) || asksPlan;
   const asksSafety = /(safe|height|rule|guideline|locker|swimwear|ticket|hygiene)/.test(lower) || heightCm != null;
@@ -591,18 +678,16 @@ async function runSmartToolFallback(
   }
 
   if (sections.length === 0) {
-    onEvent({
-      type: "status",
-      tool: "getParkRidesAndStatus",
-      label: "Checking park highlights & operating status…",
-    });
-    const fallbackRides = executeRidesTool(cfg, {}, suggestedPlaces);
-    const top = fallbackRides.rides.slice(0, 4);
+    const sampleThrill =
+      cfg.rides?.find((r) => classifyRideCategory(r) === "thrill")?.title ??
+      cfg.rides?.[0]?.title ??
+      "Recoil";
+    const sampleDining = cfg.dining?.[0]?.name ?? "Park View Restaurant";
     sections.push(
-      `Hi! I'm **Chiku**, your **${cfg.name}** buddy! I can check live wait times, filter rides by kid height (like 110 cm), suggest veg/non-veg restaurants, and open map directions.\n\n**Top Picks Right Now:**\n` +
-        top
-          .map((r) => `• **${r.title}**${r.waitMinutes != null ? ` · ${r.waitMinutes} min wait` : ""} — ${r.description}`)
-          .join("\n"),
+      pickVariant(lower, [
+        `Haha, you stumped me! My little mascot brain is 99% **${sampleThrill}** loops and 1% Wave Pool splashes — I only know **${cfg.name}** secrets! 🎢 Ask me to plan your rides, check live wait times, find kid-safe rides (like **110 cm**), or guide you to **${sampleDining}**!`,
+        `Whoa, that's way above my roller-coaster pay grade! 😄 I'm **Chiku**, and I only talk **${cfg.name}** — thrill rides, water splashes, shortest queues, yummy park food, and map directions. What shall we do next?`,
+      ]),
     );
   }
 
@@ -774,12 +859,16 @@ export async function streamWonderlaAssistant(params: {
 
     const { stream, response } = ai.generateStream({
       model: googleAI.model("gemini-2.5-flash"),
-      system: `You are Chiku, Wonderla's friendly, energetic mascot & park guide for ${cfg.name} (${cfg.location}).
-Rules:
-1. NEVER fabricate rides, restaurants, prices, wait times, directions, or timings. Always call ONLY the specific tools needed to read the latest live CMS park data for the visitor's question.
-2. When planning an itinerary or answering height questions (e.g., 110 cm child), check ride eligibility, live wait times, and show/wave pool times cleanly, then present a warm, scannable plan with bold headings and short bullet points.
-3. If the visitor asks for directions or a restaurant/ride location, call getParkMapAndDirections or getDiningAndMenus and mention that they can tap the map direction button below.
-4. Keep responses concise, friendly, and genuinely helpful for a theme park visitor on mobile.`,
+      system: `You are Chiku, Wonderla's witty, hilarious, warm-hearted official mascot and real-time park companion for ${cfg.name} (${cfg.location}).
+Personality & Rules:
+1. Talk like a real, fun theme-park mascot buddy — natural, expressive, playful, and genuinely witty (never robotic!).
+2. STRICTLY WONDERLA-ONLY WITH HUMOR:
+   - If the visitor asks casual, silly, or personal questions (e.g., "Hi Chiku, had your lunch?", "Are you married?", "Tell me a joke", "How old are you?"), reply with a short, funny, playful Wonderla-themed joke (e.g., getting splashed near the Wave Pool, running on roller-coaster adrenaline, sneaking park snacks) and playfully offer to help with rides, food, or directions inside ${cfg.name}. Do NOT call park tools for simple banter or greetings.
+   - If the visitor asks off-topic non-Wonderla questions (coding, math homework, politics, movies, general trivia, news, etc.), NEVER answer the off-topic subject — playfully joke in character as Chiku that your mascot brain only knows roller coasters, splashes, and park snacks, and invite them to ask about ${cfg.name}.
+3. NEVER fabricate rides, restaurants, prices, wait times, directions, or timings. When the visitor asks a real park question, call ONLY the exact tools needed to read the latest live CMS data.
+4. When planning an itinerary or answering height questions (e.g., 110 cm child), check ride eligibility, live wait times, and wave pool/show schedules cleanly, then present a warm, scannable plan with bold headings and short bullet points.
+5. If the visitor asks for directions or a restaurant/ride location, call getParkMapAndDirections or getDiningAndMenus and mention that they can tap the map direction button below.
+6. Keep replies punchy, friendly, and easy to read on a mobile screen.`,
       prompt,
       tools: [
         getParkRidesAndStatus,

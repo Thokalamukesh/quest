@@ -70,7 +70,6 @@ class _VisitorHomeState extends State<VisitorHome> {
   Map<String, dynamic>? _park;
   bool _loading = true;
   String? _error;
-  String? _cmsUpdateBanner;
   bool _syncingLive = false;
   Timer? _liveSyncTimer;
   final Map<String, Map<String, dynamic>> _parkCache = {};
@@ -103,7 +102,7 @@ class _VisitorHomeState extends State<VisitorHome> {
     });
   }
 
-  Future<void> _syncActiveParkFromCms({bool notifyEvenIfUnchanged = false}) async {
+  Future<void> _syncActiveParkFromCms() async {
     final current = _park;
     if (current == null || _syncingLive || !_api.isConfigured) return;
     final slug = current['slug']?.toString().trim() ?? '';
@@ -113,48 +112,9 @@ class _VisitorHomeState extends State<VisitorHome> {
     try {
       final fresh = await _api.park(slug);
       if (!mounted || _park?['slug'] != slug) return;
-      final prevUpdated = current['updatedAt']?.toString() ?? '';
-      final nextUpdated = fresh['updatedAt']?.toString() ?? '';
       final changedSections = describeParkConfigChanges(current, fresh);
-      final hasUpdate =
-          (nextUpdated.isNotEmpty && nextUpdated != prevUpdated) ||
-          changedSections.isNotEmpty;
-
       _parkCache[slug] = fresh;
-      if (hasUpdate) {
-        final summary = changedSections.isEmpty
-            ? 'Park guide updated just now'
-            : 'Live update · ${changedSections.take(3).join(', ')} refreshed';
-        setState(() {
-          _park = fresh;
-          _cmsUpdateBanner = summary;
-        });
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: wonderlaNavy,
-              duration: const Duration(seconds: 4),
-              content: Row(
-                children: [
-                  const Icon(
-                    Icons.sync_rounded,
-                    color: wonderlaGold,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      summary,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-      } else if (notifyEvenIfUnchanged) {
+      if (changedSections.isNotEmpty) {
         setState(() => _park = fresh);
       }
     } catch (_) {
@@ -216,7 +176,6 @@ class _VisitorHomeState extends State<VisitorHome> {
           _park = cached;
           _loading = false;
           _error = null;
-          _cmsUpdateBanner = null;
         });
       }
       unawaited(_syncActiveParkFromCms());
@@ -495,9 +454,6 @@ class _VisitorHomeState extends State<VisitorHome> {
                               videoUrl: _imageUrl(
                                 cfg['heroVideoUrl']?.toString(),
                               ),
-                              onSwitchPark: _parks.length > 1
-                                  ? () => setState(() => _park = null)
-                                  : null,
                             ),
                           ),
                           Padding(
@@ -546,8 +502,6 @@ class _VisitorHomeState extends State<VisitorHome> {
                                       ),
                                     ],
                                   ),
-                                  if (_cmsUpdateBanner != null)
-                                    _liveUpdateBanner(_cmsUpdateBanner!),
                                   _liveHighlightsStrip(cfg),
                                   const SizedBox(height: 18),
                                   _tileGrid(
@@ -592,49 +546,6 @@ class _VisitorHomeState extends State<VisitorHome> {
       ),
     );
   }
-
-  Widget _liveUpdateBanner(String message) => Container(
-    margin: const EdgeInsets.only(top: 12),
-    padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
-    decoration: BoxDecoration(
-      color: const Color(0xFFECF9F2),
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: const Color(0xFFBBE7CF)),
-    ),
-    child: Row(
-      children: [
-        Container(
-          width: 9,
-          height: 9,
-          decoration: const BoxDecoration(
-            color: wonderlaSuccess,
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Text(
-            message,
-            style: const TextStyle(
-              color: wonderlaNavy,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        IconButton(
-          tooltip: 'Dismiss',
-          visualDensity: VisualDensity.compact,
-          onPressed: () => setState(() => _cmsUpdateBanner = null),
-          icon: const Icon(
-            Icons.close_rounded,
-            size: 16,
-            color: wonderlaMuted,
-          ),
-        ),
-      ],
-    ),
-  );
 
   Widget _liveHighlightsStrip(Map<String, dynamic> cfg) {
     final slug = cfg['slug']?.toString() ?? 'park';
@@ -1073,10 +984,8 @@ class _HeroCard extends StatelessWidget {
     required this.location,
     required this.imageUrl,
     required this.videoUrl,
-    this.onSwitchPark,
   });
   final String name, location, imageUrl, videoUrl;
-  final VoidCallback? onSwitchPark;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -1088,13 +997,13 @@ class _HeroCard extends StatelessWidget {
         width: double.infinity,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(compact ? 0 : 26),
+          borderRadius: BorderRadius.circular(compact ? 0 : 28),
           color: wonderlaNavy,
           boxShadow: const [
             BoxShadow(
-              color: Color(0x22071a3d),
-              blurRadius: 20,
-              offset: Offset(0, 9),
+              color: Color(0x26071a3d),
+              blurRadius: 24,
+              offset: Offset(0, 10),
             ),
           ],
         ),
@@ -1117,15 +1026,19 @@ class _HeroCard extends StatelessWidget {
                 errorBuilder: (_, _, _) => const SizedBox(),
               ),
             if (videoUrl.isNotEmpty) _HeroVideoBackground(url: videoUrl),
+            // Keep the top and center of the park photo clear and bright while
+            // anchoring crisp contrast behind the bottom title overlay.
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
+                  stops: [0.0, 0.36, 0.70, 1.0],
                   colors: [
-                    Color(0xA6071a3d),
-                    Color(0x28071a3d),
-                    Color(0xCC071a3d),
+                    Color(0x1E071a3d),
+                    Color(0x00071a3d),
+                    Color(0x88071a3d),
+                    Color(0xE0071a3d),
                   ],
                 ),
               ),
@@ -1133,104 +1046,84 @@ class _HeroCard extends StatelessWidget {
             Positioned(
               left: compact ? 20 : 30,
               right: compact ? 20 : 30,
-              top: compact ? 20 : 28,
-              child: Row(
+              bottom: compact ? 74 : 78,
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white,
-                            height: 1.1,
-                            fontSize: compact ? 25 : 31,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -.5,
-                          ),
+                  if (location.isNotEmpty) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0x66071A3D),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.28),
                         ),
-                        if (location.isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              const Icon(
-                                Icons.location_on_rounded,
-                                color: wonderlaGold,
-                                size: 15.5,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.location_on_rounded,
+                            color: wonderlaGold,
+                            size: 13.5,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              location,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.15,
                               ),
-                              const SizedBox(width: 4),
-                              Flexible(
-                                child: Text(
-                                  location,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: Colors.white.withValues(alpha: .92),
-                                    fontSize: compact ? 13 : 15,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         ],
+                      ),
+                    ),
+                    const SizedBox(height: 9),
+                  ],
+                  Text(
+                    name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white,
+                      height: 1.08,
+                      fontSize: compact ? 27 : 33,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -.6,
+                      shadows: const [
+                        Shadow(
+                          color: Color(0x66071A3D),
+                          blurRadius: 14,
+                          offset: Offset(0, 3),
+                        ),
                       ],
                     ),
                   ),
-                  if (onSwitchPark != null) ...[
-                    const SizedBox(width: 10),
-                    Material(
-                      color: Colors.white.withValues(alpha: .18),
-                      borderRadius: BorderRadius.circular(20),
-                      clipBehavior: Clip.antiAlias,
-                      child: InkWell(
-                        onTap: onSwitchPark,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 11,
-                            vertical: 7,
-                          ),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: .32),
-                            ),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.swap_horiz_rounded,
-                                color: wonderlaGold,
-                                size: 16,
-                              ),
-                              SizedBox(width: 5),
-                              Text(
-                                'Parks',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
+                  const SizedBox(height: 5),
+                  Text(
+                    'Rides · Live Waits · Dining · Park Map',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: .88),
+                      fontSize: compact ? 12.5 : 14,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.1,
                     ),
-                  ],
+                  ),
                 ],
               ),
-            ),
-            Positioned(
-              left: compact ? 20 : 30,
-              right: compact ? 20 : 30,
-              bottom: compact ? 74 : 78,
-              child: _HeroSlogan(compact: compact),
             ),
           ],
         ),
@@ -1301,56 +1194,6 @@ class _HeroVideoBackgroundState extends State<_HeroVideoBackground> {
         height: controller.value.size.height,
         child: VideoPlayer(controller),
       ),
-    );
-  }
-}
-
-class _HeroSlogan extends StatelessWidget {
-  const _HeroSlogan({required this.compact});
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
-          decoration: BoxDecoration(
-            color: wonderlaGold,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x33071a3d),
-                blurRadius: 8,
-                offset: Offset(0, 2),
-              ),
-            ],
-          ),
-          child: const Text(
-            "INDIA'S LARGEST AMUSEMENT PARK CHAIN",
-            style: TextStyle(
-              color: wonderlaNavy,
-              fontSize: 10.5,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.7,
-            ),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'Your interactive guide to rides, wait times & dining',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: .94),
-            fontSize: compact ? 13.5 : 15.5,
-            fontWeight: FontWeight.w600,
-            height: 1.3,
-          ),
-        ),
-      ],
     );
   }
 }

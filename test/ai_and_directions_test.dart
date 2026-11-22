@@ -276,4 +276,44 @@ void main() {
     expect(changes, containsAll(['Wait times', 'Dining & directions']));
     expect(describeParkConfigChanges(before, before), isEmpty);
   });
+
+  test('Chiku replies with funny Wonderla-only banter for silly personal questions', () {
+    final park = _parkWithCmsDirections();
+    final lunchReply = WonderlaAiService.tryChikuBanterReply(
+      message: 'Hi Chiku had your lunch?',
+      parkConfig: park,
+    );
+    expect(lunchReply, isNotNull);
+    expect(lunchReply, contains('Wonderla Bengaluru'));
+    expect(lunchReply, contains('Greens Restaurant'));
+
+    final realFoodRequest = WonderlaAiService.tryChikuBanterReply(
+      message: 'Best veg lunch restaurant & directions',
+      parkConfig: park,
+    );
+    expect(realFoodRequest, isNull);
+  });
+
+  testWidgets(
+    'VisitorHome shows polished hero without change-park button or update popup',
+    (tester) async {
+      tester.view.physicalSize = const Size(430, 860);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildWonderlaTheme(),
+          home: VisitorHome(initialPark: _parkWithCmsDirections()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Wonderla Bengaluru'), findsOneWidget);
+      expect(find.text('Bengaluru, Karnataka'), findsOneWidget);
+      expect(find.text('Parks'), findsNothing);
+      expect(find.textContaining('Park guide updated'), findsNothing);
+      expect(find.text('Ask Chiku'), findsOneWidget);
+    },
+  );
 }
