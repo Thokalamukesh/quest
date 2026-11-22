@@ -271,7 +271,9 @@ class _RecordEditorState extends State<_RecordEditor> {
     'x' => '0 to 100 (left to right)',
     'y' => '0 to 100 (top to bottom)',
     'minHeight' => 'e.g. 120 cm',
-    'directionsUrl' => 'https://maps.google.com/...',
+    'directions' =>
+        'e.g. Walk past Dome Plaza and turn left beside Wave Pool',
+    'directionsUrl' => 'https://maps.google.com/?q=12.8343,77.4010',
     _ => null,
   };
 
@@ -307,10 +309,10 @@ class _RecordEditorState extends State<_RecordEditor> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
-                      _isMapPlaceEditor
-                          ? Icons.pin_drop_outlined
-                          : widget.manageMenu
+                      widget.manageMenu
                           ? Icons.restaurant_menu_rounded
+                          : _isMapPlaceEditor
+                          ? Icons.pin_drop_outlined
                           : Icons.edit_note_rounded,
                       color: _brandNavy,
                       size: 20,
@@ -425,7 +427,11 @@ class _RecordEditorState extends State<_RecordEditor> {
                                     decimal: true,
                                   )
                                 : TextInputType.multiline,
-                            maxLines: {'description', 'checks'}.contains(key)
+                            maxLines: {
+                              'description',
+                              'checks',
+                              'directions',
+                            }.contains(key)
                                 ? 3
                                 : 1,
                             decoration: InputDecoration(

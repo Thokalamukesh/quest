@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../ai_assistant/wonderla_ai_sheet.dart';
 import '../cms/cms_api.dart';
 import '../cms/cms_screen.dart';
 import '../park_map/models/park_discovery_item.dart';
@@ -22,6 +24,37 @@ const _navy = wonderlaNavy;
 const _pale = wonderlaCream;
 const _white = wonderlaWhite;
 
+/// Compares two CMS park config payloads and returns human-readable labels for
+/// every section that changed so visitors can be notified live.
+List<String> describeParkConfigChanges(
+  Map<String, dynamic> previous,
+  Map<String, dynamic> next,
+) {
+  const sections = <(String, String)>[
+    ('liveWaitTimes', 'Wait times'),
+    ('rides', 'Rides'),
+    ('dining', 'Dining & directions'),
+    ('parkMap', 'Park map'),
+    ('events', 'Events'),
+    ('waveRainDance', 'Wave pool'),
+    ('rideGuidelines', 'Guidelines'),
+    ('safetyHygiene', 'Safety'),
+    ('maintenanceLog', 'Maintenance'),
+  ];
+  final changed = <String>[];
+  for (final (key, label) in sections) {
+    if (jsonEncode(previous[key]) != jsonEncode(next[key])) {
+      changed.add(label);
+    }
+  }
+  const overviewKeys = ['name', 'location', 'heroImageUrl', 'homeShortcuts'];
+  if (changed.isEmpty &&
+      overviewKeys.any((k) => jsonEncode(previous[k]) != jsonEncode(next[k]))) {
+    changed.add('Park details');
+  }
+  return changed;
+}
+
 class VisitorHome extends StatefulWidget {
   const VisitorHome({super.key, this.initialPark});
   final Map<String, dynamic>? initialPark;
@@ -30,11 +63,16 @@ class VisitorHome extends StatefulWidget {
 }
 
 class _VisitorHomeState extends State<VisitorHome> {
+  static const _liveSyncInterval = Duration(seconds: 30);
+
   final _api = CmsApi();
   List<Map<String, dynamic>> _parks = [];
   Map<String, dynamic>? _park;
   bool _loading = true;
   String? _error;
+  String? _cmsUpdateBanner;
+  bool _syncingLive = false;
+  Timer? _liveSyncTimer;
   final Map<String, Map<String, dynamic>> _parkCache = {};
   final Map<String, Future<Map<String, dynamic>>> _parkRequests = {};
 
@@ -47,6 +85,82 @@ class _VisitorHomeState extends State<VisitorHome> {
       _loading = false;
     } else {
       _loadInitial();
+      _startLiveCmsSync();
+    }
+  }
+
+  @override
+  void dispose() {
+    _liveSyncTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startLiveCmsSync() {
+    if (!_api.isConfigured || widget.initialPark != null) return;
+    _liveSyncTimer?.cancel();
+    _liveSyncTimer = Timer.periodic(_liveSyncInterval, (_) {
+      unawaited(_syncActiveParkFromCms());
+    });
+  }
+
+  Future<void> _syncActiveParkFromCms({bool notifyEvenIfUnchanged = false}) async {
+    final current = _park;
+    if (current == null || _syncingLive || !_api.isConfigured) return;
+    final slug = current['slug']?.toString().trim() ?? '';
+    if (slug.isEmpty) return;
+
+    _syncingLive = true;
+    try {
+      final fresh = await _api.park(slug);
+      if (!mounted || _park?['slug'] != slug) return;
+      final prevUpdated = current['updatedAt']?.toString() ?? '';
+      final nextUpdated = fresh['updatedAt']?.toString() ?? '';
+      final changedSections = describeParkConfigChanges(current, fresh);
+      final hasUpdate =
+          (nextUpdated.isNotEmpty && nextUpdated != prevUpdated) ||
+          changedSections.isNotEmpty;
+
+      _parkCache[slug] = fresh;
+      if (hasUpdate) {
+        final summary = changedSections.isEmpty
+            ? 'Park guide updated just now'
+            : 'Live update · ${changedSections.take(3).join(', ')} refreshed';
+        setState(() {
+          _park = fresh;
+          _cmsUpdateBanner = summary;
+        });
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: wonderlaNavy,
+              duration: const Duration(seconds: 4),
+              content: Row(
+                children: [
+                  const Icon(
+                    Icons.sync_rounded,
+                    color: wonderlaGold,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      summary,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+      } else if (notifyEvenIfUnchanged) {
+        setState(() => _park = fresh);
+      }
+    } catch (_) {
+      // Silently keep current park view if background poll fails transiently.
+    } finally {
+      _syncingLive = false;
     }
   }
 
@@ -102,8 +216,10 @@ class _VisitorHomeState extends State<VisitorHome> {
           _park = cached;
           _loading = false;
           _error = null;
+          _cmsUpdateBanner = null;
         });
       }
+      unawaited(_syncActiveParkFromCms());
       return;
     }
     setState(() {
@@ -197,14 +313,39 @@ class _VisitorHomeState extends State<VisitorHome> {
     );
   }
 
-  void _openParkMap(Map<String, dynamic> cfg) {
+  void _openParkMap(
+    Map<String, dynamic> cfg, {
+    String? focusPlaceName,
+    bool autoStartDirections = false,
+    String? directionsUrl,
+    String? directionsNote,
+  }) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ConfiguredParkMapScreen(
           config: cfg,
           baseUrl: _api.baseUrl,
           api: _api,
+          initialFocusPlaceName: focusPlaceName,
+          autoStartDirections: autoStartDirections,
+          initialDirectionsUrl: directionsUrl,
+          initialDirectionsNote: directionsNote,
         ),
+      ),
+    );
+  }
+
+  void _openAiAssistant(Map<String, dynamic> cfg) {
+    showWonderlaAiAssistantSheet(
+      context,
+      parkConfig: cfg,
+      baseUrl: _api.baseUrl,
+      onOpenPlaceOnMap: (place) => _openParkMap(
+        cfg,
+        focusPlaceName: place.name,
+        autoStartDirections: place.prefersDirections,
+        directionsUrl: place.directionsUrl,
+        directionsNote: place.directions,
       ),
     );
   }
@@ -321,6 +462,9 @@ class _VisitorHomeState extends State<VisitorHome> {
         : 'Wonderla $parkName';
     return Scaffold(
       backgroundColor: _pale,
+      floatingActionButton: WonderlaAiFab(
+        onTap: () => _openAiAssistant(cfg),
+      ),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -402,6 +546,8 @@ class _VisitorHomeState extends State<VisitorHome> {
                                       ),
                                     ],
                                   ),
+                                  if (_cmsUpdateBanner != null)
+                                    _liveUpdateBanner(_cmsUpdateBanner!),
                                   _liveHighlightsStrip(cfg),
                                   const SizedBox(height: 18),
                                   _tileGrid(
@@ -446,6 +592,49 @@ class _VisitorHomeState extends State<VisitorHome> {
       ),
     );
   }
+
+  Widget _liveUpdateBanner(String message) => Container(
+    margin: const EdgeInsets.only(top: 12),
+    padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
+    decoration: BoxDecoration(
+      color: const Color(0xFFECF9F2),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: const Color(0xFFBBE7CF)),
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 9,
+          height: 9,
+          decoration: const BoxDecoration(
+            color: wonderlaSuccess,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            message,
+            style: const TextStyle(
+              color: wonderlaNavy,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: 'Dismiss',
+          visualDensity: VisualDensity.compact,
+          onPressed: () => setState(() => _cmsUpdateBanner = null),
+          icon: const Icon(
+            Icons.close_rounded,
+            size: 16,
+            color: wonderlaMuted,
+          ),
+        ),
+      ],
+    ),
+  );
 
   Widget _liveHighlightsStrip(Map<String, dynamic> cfg) {
     final slug = cfg['slug']?.toString() ?? 'park';
@@ -843,10 +1032,15 @@ class _VisitorHomeState extends State<VisitorHome> {
                   child: Align(
                     alignment: Alignment.center,
                     child: TextButton.icon(
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const CmsScreen()),
-                      ),
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const CmsScreen()),
+                        );
+                        if (!mounted) return;
+                        _parkCache.clear();
+                        await _loadInitial();
+                      },
                       icon: const Icon(Icons.admin_panel_settings_outlined),
                       label: const Text('Admin'),
                     ),

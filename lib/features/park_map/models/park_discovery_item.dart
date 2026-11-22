@@ -117,6 +117,8 @@ class ParkDiscoveryItem {
     this.menuItems = const [],
     this.zoneName,
     this.address,
+    this.directionsUrl,
+    this.directionsNote,
     this.rawRide,
     this.rawDining,
     this.rawWaitTime,
@@ -151,6 +153,8 @@ class ParkDiscoveryItem {
   final List<Map<String, dynamic>> menuItems;
   final String? zoneName;
   final String? address;
+  final String? directionsUrl;
+  final String? directionsNote;
 
   final Map<String, dynamic>? rawRide;
   final Map<String, dynamic>? rawDining;
@@ -160,6 +164,10 @@ class ParkDiscoveryItem {
   final MapPlace? osmPlace;
 
   bool get hasGpsCoordinates => position != null;
+  bool get hasDirections =>
+      hasGpsCoordinates ||
+      (directionsUrl != null && directionsUrl!.trim().isNotEmpty) ||
+      (directionsNote != null && directionsNote!.trim().isNotEmpty);
   bool get hasIllustratedCoords =>
       mapX != null && mapY != null && mapX! >= 0 && mapX! <= 100 && mapY! >= 0 && mapY! <= 100;
   bool get isDining =>
@@ -305,9 +313,22 @@ class ParkDiscoveryCatalog {
         matchedWave: matchedWave,
       );
 
+      final directionsUrl = _firstNonEmptyOrNull([
+        place['directionsUrl']?.toString(),
+        matchedDining?['directionsUrl']?.toString(),
+        matchedRide?['directionsUrl']?.toString(),
+      ]);
+      final directionsNote = _firstNonEmptyOrNull([
+        place['directions']?.toString(),
+        matchedDining?['directions']?.toString(),
+        matchedRide?['directions']?.toString(),
+      ]);
+
       final position = _resolvePosition(
         place,
         isBengaluruPark: isBengaluruPark,
+        fallbackSources: [?matchedDining, ?matchedRide],
+        directionsUrl: directionsUrl,
       );
       final mapX = _tryDouble(place['x']);
       final mapY = _tryDouble(place['y']);
@@ -423,6 +444,8 @@ class ParkDiscoveryCatalog {
           kioskBookingEnabled: kioskBookingEnabled,
           menuItems: menuItems,
           zoneName: zoneName,
+          directionsUrl: directionsUrl,
+          directionsNote: directionsNote,
           rawRide: matchedRide,
           rawDining: matchedDining,
           rawWaitTime: matchedWait,
@@ -437,6 +460,78 @@ class ParkDiscoveryCatalog {
       zones: zones,
       mapImageUrl: resolveMediaUrl(parkMap['img']?.toString(), baseUrl),
       mapDescription: parkMap['description']?.toString().trim() ?? '',
+    );
+  }
+
+  /// Builds a discovery item directly from a dining outlet in `config['dining']`
+  /// so tapping Map on any restaurant immediately opens directions on the map.
+  static ParkDiscoveryItem fromDiningEntry(
+    Map<String, dynamic> outlet, {
+    required Map<String, dynamic> config,
+    required String baseUrl,
+    required bool isBengaluruPark,
+  }) {
+    final name = (outlet['name'] ?? outlet['title'] ?? 'Restaurant')
+        .toString()
+        .trim();
+    final norm = normalizePlaceName(name);
+    final parkMap = Map<String, dynamic>.from(
+      config['parkMap'] as Map? ?? const {},
+    );
+    final places = _indexByName(
+      _mapList(parkMap['places']),
+      const ['name', 'title'],
+    );
+    final matchedPlace = _lookupFuzzy(places, norm);
+
+    final directionsUrl = _firstNonEmptyOrNull([
+      outlet['directionsUrl']?.toString(),
+      matchedPlace?['directionsUrl']?.toString(),
+    ]);
+    final directionsNote = _firstNonEmptyOrNull([
+      outlet['directions']?.toString(),
+      matchedPlace?['directions']?.toString(),
+    ]);
+    final position = _resolvePosition(
+      matchedPlace ?? outlet,
+      isBengaluruPark: isBengaluruPark,
+      fallbackSources: [outlet],
+      directionsUrl: directionsUrl,
+    );
+    final tags = _stringList(outlet['tags']);
+    final cuisine = _firstNonEmptyOrNull([outlet['cuisine']?.toString()]);
+
+    return ParkDiscoveryItem(
+      id: _firstNonEmpty([outlet['id']?.toString(), 'dining-$norm']),
+      name: name,
+      rawCategory: matchedPlace?['category']?.toString().trim() ?? 'Dining',
+      category: ParkDiscoveryCategory.restaurants,
+      icon: resolveMarkerIcon(
+        category: ParkDiscoveryCategory.restaurants,
+        name: name,
+        rawCategory: 'Dining',
+      ),
+      rawPlace: matchedPlace ?? outlet,
+      searchIndex:
+          '$name dining restaurant ${cuisine ?? ''} ${outlet['description'] ?? ''} ${tags.join(' ')}'
+              .toLowerCase(),
+      position: position,
+      mapX: matchedPlace == null ? null : _tryDouble(matchedPlace['x']),
+      mapY: matchedPlace == null ? null : _tryDouble(matchedPlace['y']),
+      imageUrl: resolveMediaUrl(
+        _firstNonEmpty([
+          outlet['img']?.toString(),
+          matchedPlace?['avatarImage']?.toString(),
+        ]),
+        baseUrl,
+      ),
+      description: outlet['description']?.toString().trim() ?? '',
+      cuisine: cuisine,
+      tags: tags,
+      menuItems: _mapList(outlet['items']),
+      directionsUrl: directionsUrl,
+      directionsNote: directionsNote,
+      rawDining: outlet,
     );
   }
 
@@ -797,22 +892,58 @@ class ParkDiscoveryCatalog {
     return category.icon;
   }
 
+  static LatLng? parseCoordinatesFromDirectionsUrl(String? rawUrl) {
+    final trimmed = rawUrl?.trim() ?? '';
+    if (trimmed.isEmpty) return null;
+    final patterns = [
+      RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)'),
+      RegExp(r'[?&](?:q|query|destination|ll|daddr)=(-?\d+\.\d+),(-?\d+\.\d+)'),
+      RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)'),
+    ];
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(trimmed);
+      if (match != null) {
+        final lat = double.tryParse(match.group(1) ?? '');
+        final lng = double.tryParse(match.group(2) ?? '');
+        if (lat != null &&
+            lng != null &&
+            lat >= -90 &&
+            lat <= 90 &&
+            lng >= -180 &&
+            lng <= 180) {
+          return LatLng(lat, lng);
+        }
+      }
+    }
+    return null;
+  }
+
   static LatLng? _resolvePosition(
     Map<String, dynamic> place, {
     required bool isBengaluruPark,
+    List<Map<String, dynamic>> fallbackSources = const [],
+    String? directionsUrl,
   }) {
-    final lat = _tryDouble(place['lat']);
-    final lng = _tryDouble(place['lng']);
-    if (lat != null &&
-        lng != null &&
-        lat >= -90 &&
-        lat <= 90 &&
-        lng >= -180 &&
-        lng <= 180) {
-      return LatLng(lat, lng);
+    for (final source in [place, ...fallbackSources]) {
+      final lat = _tryDouble(source['lat']);
+      final lng = _tryDouble(source['lng']);
+      if (lat != null &&
+          lng != null &&
+          lat >= -90 &&
+          lat <= 90 &&
+          lng >= -180 &&
+          lng <= 180) {
+        return LatLng(lat, lng);
+      }
     }
+    final fromUrl = parseCoordinatesFromDirectionsUrl(
+      directionsUrl ?? place['directionsUrl']?.toString(),
+    );
+    if (fromUrl != null) return fromUrl;
     if (isBengaluruPark) {
-      final name = normalizePlaceName(place['name']?.toString() ?? '');
+      final name = normalizePlaceName(
+        (place['name'] ?? place['title'] ?? '').toString(),
+      );
       if (name.isEmpty) return null;
       for (final known in wonderlaFeaturedLocations) {
         final knownName = normalizePlaceName(known.name);

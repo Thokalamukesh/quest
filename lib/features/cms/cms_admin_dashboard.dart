@@ -89,6 +89,9 @@ class _AdminDashboardState extends State<_AdminDashboard> {
       ('title', 'Ride name'),
       ('description', 'Description'),
       ('img', 'Ride image'),
+      ('minHeight', 'Minimum height (optional)'),
+      ('directions', 'Walking directions note (optional)'),
+      ('directionsUrl', 'Directions URL (optional)'),
       ('tags', 'Tags (comma separated)'),
       ('kioskBookingEnabled', 'Enable kiosk booking'),
     ],
@@ -97,6 +100,8 @@ class _AdminDashboardState extends State<_AdminDashboard> {
       ('time', 'Time'),
       ('description', 'Description'),
       ('img', 'Event image'),
+      ('directions', 'Walking directions note (optional)'),
+      ('directionsUrl', 'Directions URL (optional)'),
       ('tags', 'Tags (comma separated)'),
     ],
     'Dining & menus': [
@@ -104,7 +109,10 @@ class _AdminDashboardState extends State<_AdminDashboard> {
       ('cuisine', 'Cuisine'),
       ('description', 'Description'),
       ('img', 'Outlet image'),
-      ('directionsUrl', 'Directions URL'),
+      ('directions', 'Walking directions note'),
+      ('directionsUrl', 'Directions URL (Google Maps link)'),
+      ('lat', 'Latitude'),
+      ('lng', 'Longitude'),
       ('tags', 'Tags (comma separated)'),
     ],
     'Live wait times': [
@@ -2767,6 +2775,20 @@ class _AdminDashboardState extends State<_AdminDashboard> {
           icon: Icons.restaurant_menu_rounded,
         ),
       );
+      final hasDirections =
+          (item['directions']?.toString().trim().isNotEmpty ?? false) ||
+          (item['directionsUrl']?.toString().trim().isNotEmpty ?? false) ||
+          _hasValidMapCoordinates(item);
+      if (hasDirections) {
+        badges.add(
+          const _CmsPillBadge(
+            label: 'Directions set',
+            foreground: wonderlaSuccess,
+            background: Color(0xFFECF9F2),
+            icon: Icons.directions_rounded,
+          ),
+        );
+      }
     }
 
     if (_section == 'Wave pool & rain dance') {
@@ -3722,6 +3744,8 @@ class _AdminDashboardState extends State<_AdminDashboard> {
         schema: const [
           ('name', 'Place name'),
           ('category', 'Category'),
+          ('directions', 'Walking directions note (optional)'),
+          ('directionsUrl', 'Directions URL (Google Maps link, optional)'),
           ('x', 'Horizontal position %'),
           ('y', 'Vertical position %'),
           ('lat', 'Latitude'),

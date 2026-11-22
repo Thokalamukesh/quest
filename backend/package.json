@@ -13,16 +13,19 @@
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
+    "@genkit-ai/google-genai": "^1.44.0",
     "@opennextjs/cloudflare": "^1.20.12",
     "@types/leaflet": "^1.9.22",
     "@types/qrcode": "^1.5.6",
     "@vercel/blob": "^2.8.2",
+    "genkit": "^1.44.0",
     "leaflet": "^1.9.4",
     "next": "^15.5.28",
     "qrcode": "^1.5.4",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "react-leaflet": "^4.2.1"
+    "react-leaflet": "^4.2.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/google.maps": "^3.66.7",

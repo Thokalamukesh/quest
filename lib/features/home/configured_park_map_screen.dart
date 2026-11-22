@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../shared/external_link.dart';
 import '../../shared/wonderla_palette.dart';
+import '../ai_assistant/wonderla_ai_sheet.dart';
 import '../cms/cms_api.dart';
 import '../park_map/models/map_place.dart';
 import '../park_map/models/park_discovery_item.dart';
@@ -14,7 +17,6 @@ import '../park_map/services/location_service.dart';
 import '../park_map/services/open_street_map_service.dart';
 import '../park_map/services/saved_places_store.dart';
 import '../park_map/widgets/dining_menu_sheet.dart';
-import '../park_map/widgets/illustrated_park_map_view.dart';
 import '../park_map/widgets/park_filter_bar.dart';
 import '../park_map/widgets/park_map_marker.dart';
 import '../park_map/widgets/park_place_detail_sheet.dart';
@@ -27,9 +29,9 @@ const _mapCanvas = wonderlaCream;
 enum _ParkSortMode { featured, shortestWait, nearest }
 
 /// Interactive Wonderla park map and attractions discovery experience.
-/// Preserves existing park config, GPS proximity checks, and OSRM walking
-/// directions while adding multi-select filters, custom category markers,
-/// illustrated park map mode, My Day saved places, and rich detail sheets.
+/// Preserves existing park config, GPS proximity checks, OSRM walking
+/// directions, and CMS-configured directions while adding multi-select filters,
+/// custom category markers, My Day saved places, and Genkit AI assistance.
 class ConfiguredParkMapScreen extends StatefulWidget {
   const ConfiguredParkMapScreen({
     super.key,
@@ -38,6 +40,10 @@ class ConfiguredParkMapScreen extends StatefulWidget {
     this.initialPosition,
     this.api,
     this.initialFocusPlaceName,
+    this.autoStartDirections = false,
+    this.initialFocusPlace,
+    this.initialDirectionsUrl,
+    this.initialDirectionsNote,
   });
 
   final Map<String, dynamic> config;
@@ -45,6 +51,10 @@ class ConfiguredParkMapScreen extends StatefulWidget {
   final Position? initialPosition;
   final CmsApi? api;
   final String? initialFocusPlaceName;
+  final bool autoStartDirections;
+  final Map<String, dynamic>? initialFocusPlace;
+  final String? initialDirectionsUrl;
+  final String? initialDirectionsNote;
 
   @override
   State<ConfiguredParkMapScreen> createState() =>
@@ -53,7 +63,6 @@ class ConfiguredParkMapScreen extends StatefulWidget {
 
 class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   final _controller = MapController();
-  final _illustratedController = IllustratedParkMapController();
   final _sheetController = DraggableScrollableController();
   final _location = LocationService();
   final _routingService = OpenStreetMapService();
@@ -67,17 +76,17 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   LatLng? _center;
   LatLng? _visitorPosition;
   ParkDiscoveryItem? _selected;
+  ParkDiscoveryItem? _activeDirectionsItem;
   WalkingRoute? _route;
   final RouteMode _routeMode = RouteMode.walking;
 
-  // Filter, sort & map view state (updated locally with zero API/map reloads).
+  // Filter & sort state (updated locally with zero API/map reloads).
   final Set<ParkDiscoveryCategory> _selectedCategories = {};
   String? _selectedZone;
   bool _savedOnly = false;
   bool _shortWaitOnly = false;
   bool _directionsReadyOnly = false;
   bool _kioskBookingOnly = false;
-  bool _useIllustratedMap = false;
   _ParkSortMode _sortMode = _ParkSortMode.featured;
 
   bool _gpsLoading = false;
@@ -298,8 +307,13 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     }
   }
 
-  void _applyInitialFocus(String focusName) {
-    final targetNorm = ParkDiscoveryCatalog.normalizePlaceName(focusName);
+  ParkDiscoveryItem? _resolveTargetItem({
+    required String placeName,
+    Map<String, dynamic>? rawPlace,
+    String? directionsUrl,
+    String? directionsNote,
+  }) {
+    final targetNorm = ParkDiscoveryCatalog.normalizePlaceName(placeName);
     ParkDiscoveryItem? match;
     for (final item in _catalog.items) {
       final norm = ParkDiscoveryCatalog.normalizePlaceName(item.name);
@@ -310,16 +324,135 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         break;
       }
     }
+
+    if (match != null) {
+      final mergedUrl =
+          (directionsUrl?.trim().isNotEmpty == true)
+          ? directionsUrl!.trim()
+          : match.directionsUrl;
+      final mergedNote =
+          (directionsNote?.trim().isNotEmpty == true)
+          ? directionsNote!.trim()
+          : match.directionsNote;
+      final mergedPos =
+          match.position ??
+          ParkDiscoveryCatalog.parseCoordinatesFromDirectionsUrl(mergedUrl);
+      if (mergedUrl == match.directionsUrl &&
+          mergedNote == match.directionsNote &&
+          mergedPos == match.position) {
+        return match;
+      }
+      return ParkDiscoveryItem(
+        id: match.id,
+        name: match.name,
+        rawCategory: match.rawCategory,
+        category: match.category,
+        icon: match.icon,
+        rawPlace: match.rawPlace,
+        searchIndex: match.searchIndex,
+        position: mergedPos,
+        mapX: match.mapX,
+        mapY: match.mapY,
+        imageUrl: match.imageUrl,
+        description: match.description,
+        cuisine: match.cuisine,
+        tags: match.tags,
+        waitTimeMinutes: match.waitTimeMinutes,
+        minHeight: match.minHeight,
+        operatingStatus: match.operatingStatus,
+        lastServiceDate: match.lastServiceDate,
+        serviceChecks: match.serviceChecks,
+        sessionTimeSlots: match.sessionTimeSlots,
+        sessionDurationMinutes: match.sessionDurationMinutes,
+        kioskBookingEnabled: match.kioskBookingEnabled,
+        menuItems: match.menuItems,
+        zoneName: match.zoneName,
+        address: match.address,
+        directionsUrl: mergedUrl,
+        directionsNote: mergedNote,
+        rawRide: match.rawRide,
+        rawDining: match.rawDining,
+        rawWaitTime: match.rawWaitTime,
+        rawWaveSession: match.rawWaveSession,
+        rawMaintenance: match.rawMaintenance,
+        osmPlace: match.osmPlace,
+      );
+    }
+
+    // Check CMS dining outlets so restaurants not separately added to parkMap.places
+    // still open directions cleanly when a visitor taps Map!
+    final diningList = (_parkConfig['dining'] as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e));
+    for (final outlet in diningList) {
+      final norm = ParkDiscoveryCatalog.normalizePlaceName(
+        outlet['name']?.toString() ?? '',
+      );
+      if (norm == targetNorm ||
+          norm.startsWith('$targetNorm ') ||
+          targetNorm.startsWith('$norm ')) {
+        return ParkDiscoveryCatalog.fromDiningEntry(
+          outlet,
+          config: _parkConfig,
+          baseUrl: widget.baseUrl,
+          isBengaluruPark: _isBengaluruPark,
+        );
+      }
+    }
+
+    if (rawPlace != null) {
+      if (rawPlace.containsKey('cuisine') || rawPlace.containsKey('items')) {
+        return ParkDiscoveryCatalog.fromDiningEntry(
+          rawPlace,
+          config: _parkConfig,
+          baseUrl: widget.baseUrl,
+          isBengaluruPark: _isBengaluruPark,
+        );
+      }
+      return ParkDiscoveryCatalog.fromRideEntry(
+        rawPlace,
+        config: _parkConfig,
+        baseUrl: widget.baseUrl,
+      );
+    }
+
+    if (placeName.trim().isNotEmpty) {
+      final cleanUrl = directionsUrl?.trim();
+      final cleanNote = directionsNote?.trim();
+      return ParkDiscoveryItem(
+        id: 'focus-$targetNorm',
+        name: placeName.trim(),
+        rawCategory: 'Destination',
+        category: ParkDiscoveryCategory.attractions,
+        icon: Icons.place_rounded,
+        rawPlace: {'name': placeName.trim()},
+        searchIndex: placeName.toLowerCase(),
+        position: ParkDiscoveryCatalog.parseCoordinatesFromDirectionsUrl(
+          cleanUrl,
+        ),
+        directionsUrl: cleanUrl?.isNotEmpty == true ? cleanUrl : null,
+        directionsNote: cleanNote?.isNotEmpty == true ? cleanNote : null,
+      );
+    }
+    return null;
+  }
+
+  void _applyInitialFocus(String focusName) {
+    final match = _resolveTargetItem(
+      placeName: focusName,
+      rawPlace: widget.initialFocusPlace,
+      directionsUrl: widget.initialDirectionsUrl,
+      directionsNote: widget.initialDirectionsNote,
+    );
     if (match == null) return;
     _selected = match;
     if (match.position != null) {
       _center = match.position;
-    } else if (match.hasIllustratedCoords && _catalog.hasIllustratedMap) {
-      _useIllustratedMap = true;
+    }
+    if (widget.autoStartDirections) {
+      _activeDirectionsItem = match;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && match?.mapX != null && match?.mapY != null) {
-          _illustratedController.focusPercent(match!.mapX!, match.mapY!);
-        }
+        if (mounted) _startDirectionsTo(match);
       });
     }
   }
@@ -337,7 +470,6 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         });
         if (_visitorPosition == null &&
             _mapReady &&
-            !_useIllustratedMap &&
             _configuredCenter != null) {
           _controller.move(_configuredCenter!, 16);
         }
@@ -409,22 +541,14 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     });
     if (position != null &&
         _isNearPark(LatLng(position.latitude, position.longitude)) &&
-        _mapReady &&
-        !_useIllustratedMap) {
+        _mapReady) {
       _controller.move(LatLng(position.latitude, position.longitude), 17);
-    } else if (position != null &&
-        _mapReady &&
-        !_useIllustratedMap &&
-        _configuredCenter != null) {
+    } else if (position != null && _mapReady && _configuredCenter != null) {
       _controller.move(_configuredCenter!, 16);
     }
   }
 
   void _resetMapView() {
-    if (_useIllustratedMap) {
-      _illustratedController.reset();
-      return;
-    }
     final target = _configuredCenter;
     if (target != null && _mapReady) {
       _controller.rotate(0);
@@ -433,14 +557,6 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   }
 
   void _zoomBy(double delta) {
-    if (_useIllustratedMap) {
-      if (delta > 0) {
-        _illustratedController.zoomIn();
-      } else {
-        _illustratedController.zoomOut();
-      }
-      return;
-    }
     if (!_mapReady) return;
     final nextZoom = (_currentZoom + delta).clamp(14.5, 19.0);
     _controller.move(_controller.camera.center, nextZoom);
@@ -477,7 +593,6 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         shortWaitOnly: _shortWaitOnly,
         directionsReadyOnly: _directionsReadyOnly,
         kioskBookingOnly: _kioskBookingOnly,
-        useIllustratedMap: _useIllustratedMap,
       ),
     );
     if (result == null || !mounted) return;
@@ -489,7 +604,6 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
       _shortWaitOnly = result.shortWaitOnly;
       _directionsReadyOnly = result.directionsReadyOnly;
       _kioskBookingOnly = result.kioskBookingOnly;
-      _useIllustratedMap = result.useIllustratedMap;
     });
   }
 
@@ -499,10 +613,8 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
       _selected = item;
       _routeError = null;
     });
-    if (!_useIllustratedMap && item.position != null && _mapReady) {
+    if (item.position != null && _mapReady) {
       _controller.move(item.position!, 17.8);
-    } else if (_useIllustratedMap && item.hasIllustratedCoords) {
-      _illustratedController.focusPercent(item.mapX!, item.mapY!);
     }
     if (openSheet) {
       _openItemDetailSheet(item);
@@ -510,31 +622,13 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
   }
 
   void _openItemDetailSheet(ParkDiscoveryItem item) {
-    final canSwitchToGuideMap =
-        !_useIllustratedMap &&
-        !item.hasGpsCoordinates &&
-        item.hasIllustratedCoords &&
-        _catalog.hasIllustratedMap;
-
     showParkPlaceDetailSheet(
       context,
       item: item,
       parkSlug: _parkSlug,
       distanceLabel: _distanceToVisitor(item),
       routing: _routing,
-      onDirections: item.hasGpsCoordinates
-          ? () => _startDirectionsTo(item)
-          : null,
-      onShowOnGuideMap: canSwitchToGuideMap
-          ? () {
-              setState(() => _useIllustratedMap = true);
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted && item.hasIllustratedCoords) {
-                  _illustratedController.focusPercent(item.mapX!, item.mapY!);
-                }
-              });
-            }
-          : null,
+      onDirections: item.hasDirections ? () => _startDirectionsTo(item) : null,
       onViewDetails: _canViewDetails(item) ? () => _openDetailsScreen(item) : null,
       viewDetailsLabel: item.isDining
           ? 'View Menu'
@@ -556,6 +650,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
         outlet: item.rawDining!,
         resolveUrl: (path) =>
             ParkDiscoveryCatalog.resolveMediaUrl(path, widget.baseUrl),
+        onLocateOnMap: () => _startDirectionsTo(item),
       );
       return;
     }
@@ -584,21 +679,72 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     );
   }
 
+  String? _effectiveDirectionsUrl(ParkDiscoveryItem item) {
+    final explicit = item.directionsUrl?.trim() ?? '';
+    if (explicit.isNotEmpty) return explicit;
+    final pos = item.position;
+    if (pos != null) {
+      return 'https://www.google.com/maps/dir/?api=1&destination=${pos.latitude},${pos.longitude}&travelmode=walking';
+    }
+    return null;
+  }
+
+  Future<void> _openExternalDirections(ParkDiscoveryItem item) async {
+    final url = _effectiveDirectionsUrl(item);
+    if (url == null) return;
+    final launched = await openExternalUrl(url);
+    if (!launched && mounted) {
+      await Clipboard.setData(ClipboardData(text: url));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('Directions link copied to clipboard.'),
+          ),
+        );
+    }
+  }
+
+  void _openAiAssistant() {
+    showWonderlaAiAssistantSheet(
+      context,
+      parkConfig: _parkConfig,
+      baseUrl: widget.baseUrl,
+      onOpenPlaceOnMap: (place) {
+        final target = _resolveTargetItem(
+          placeName: place.name,
+          directionsUrl: place.directionsUrl,
+          directionsNote: place.directions,
+        );
+        if (target == null) return;
+        if (place.prefersDirections) {
+          _startDirectionsTo(target);
+        } else {
+          _onSelectItem(target);
+        }
+      },
+    );
+  }
+
   void _startDirectionsTo(ParkDiscoveryItem item) {
     _routeRequestId++;
     setState(() {
       _selected = item;
+      _activeDirectionsItem = item;
       _route = null;
       _routeError = null;
       _routing = false;
-      if (_useIllustratedMap) _useIllustratedMap = false;
     });
     final position = item.position;
     if (position == null) {
-      setState(
-        () => _routeError =
-            'Add this place’s Latitude and Longitude in CMS Admin → Park map → Map places. Save the item and map configuration, then tap it again.',
-      );
+      if (!item.hasDirections) {
+        setState(
+          () => _routeError =
+              'Add directions or GPS coordinates for "${item.name}" in CMS Admin to enable guided directions.',
+        );
+      }
       return;
     }
     if (_mapReady) _controller.move(position, 18);
@@ -758,16 +904,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (_useIllustratedMap && _catalog.hasIllustratedMap)
-          IllustratedParkMapView(
-            imageUrl: _catalog.mapImageUrl,
-            items: visibleItems,
-            selectedItemId: _selected?.id,
-            controller: _illustratedController,
-            onSelectItem: _onSelectItem,
-          )
-        else
-          _liveMap(visibleItems),
+        _liveMap(visibleItems),
 
         // Top floating search & category filter chips overlay
         Positioned(
@@ -817,30 +954,20 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
           ),
         ),
 
-        // Prominent floating Live GPS | Park Guide segmented pill switcher
-        if (_catalog.hasIllustratedMap)
-          Positioned(
-            top: controlsTop,
-            left: 12,
-            child: _mapModeSwitcherPill(),
-          ),
-
         // Right-edge floating map controls
         Positioned(
           top: controlsTop,
           right: 12,
           child: Column(
             children: [
-              if (!_useIllustratedMap) ...[
-                _mapControlButton(
-                  icon: Icons.my_location_rounded,
-                  tooltip: 'Center on my live location',
-                  loading: _gpsLoading,
-                  active: _visitorPosition != null,
-                  onTap: _locateVisitor,
-                ),
-                const SizedBox(height: 8),
-              ],
+              _mapControlButton(
+                icon: Icons.my_location_rounded,
+                tooltip: 'Center on my live location',
+                loading: _gpsLoading,
+                active: _visitorPosition != null,
+                onTap: _locateVisitor,
+              ),
+              const SizedBox(height: 8),
               _mapControlButton(
                 icon: Icons.center_focus_strong_rounded,
                 tooltip: 'Reset park map view',
@@ -879,105 +1006,37 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
 
         if (_routeError != null)
           Positioned(
-            top: _catalog.hasIllustratedMap ? controlsTop + 48 : controlsTop,
+            top: controlsTop,
             left: 12,
             right: 66,
             child: _routeNotice(_routeError!),
           )
-        else if (_locationMessage != null && !_gpsLoading && !_useIllustratedMap)
+        else if (_locationMessage != null && !_gpsLoading)
           Positioned(
-            top: _catalog.hasIllustratedMap ? controlsTop + 48 : controlsTop,
+            top: controlsTop,
             left: 12,
             right: 66,
             child: _locationBanner(),
           ),
 
-        if (_route != null && !_useIllustratedMap)
+        if (_route != null)
           Positioned(
             left: 12,
-            bottom: bottomOffset,
+            bottom: bottomOffset + 62,
             child: _routeSummary(_route!),
           ),
+
+        Positioned(
+          left: 12,
+          bottom: bottomOffset,
+          child: WonderlaAiFab(
+            compact: !isWide,
+            onTap: _openAiAssistant,
+          ),
+        ),
       ],
     );
   }
-
-  Widget _mapModeSwitcherPill() => Material(
-    color: Colors.white.withValues(alpha: .97),
-    elevation: 4,
-    shadowColor: const Color(0x30102454),
-    borderRadius: BorderRadius.circular(24),
-    child: Container(
-      padding: const EdgeInsets.all(3.5),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: wonderlaBorder),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _modePillOption(
-            label: 'Live GPS',
-            icon: Icons.map_rounded,
-            selected: !_useIllustratedMap,
-            onTap: () {
-              if (_useIllustratedMap) {
-                setState(() => _useIllustratedMap = false);
-              }
-            },
-          ),
-          _modePillOption(
-            label: 'Park Guide',
-            icon: Icons.explore_rounded,
-            selected: _useIllustratedMap,
-            onTap: () {
-              if (!_useIllustratedMap) {
-                setState(() => _useIllustratedMap = true);
-              }
-            },
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _modePillOption({
-    required String label,
-    required IconData icon,
-    required bool selected,
-    required VoidCallback onTap,
-  }) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(20),
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-      decoration: BoxDecoration(
-        color: selected ? wonderlaNavy : Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 14.5,
-            color: selected ? wonderlaGold : wonderlaMuted,
-          ),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              color: selected ? Colors.white : wonderlaNavy,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
 
   Widget _liveMap(List<ParkDiscoveryItem> visibleItems) {
     final initialCenter = _center;
@@ -1254,10 +1313,15 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
               ],
             ),
           ),
-        if (_selected != null && _route == null) _selectedBanner(_selected!),
+        if (_selected != null && _activeDirectionsItem == null && _route == null)
+          _selectedBanner(_selected!),
         Expanded(
-          child: _route != null
-              ? _directionsPanel(_route!, scrollController: scrollController)
+          child: (_activeDirectionsItem != null || _route != null)
+              ? _directionsPanel(
+                  item: _activeDirectionsItem ?? _selected,
+                  route: _route,
+                  scrollController: scrollController,
+                )
               : visibleItems.isEmpty
               ? _emptyFilterState(query)
               : ListView.separated(
@@ -1629,7 +1693,7 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     final label = _gpsLoading
         ? 'Locating'
         : live
-        ? 'Live GPS'
+        ? 'In park'
         : outsidePark
         ? 'Park map'
         : 'GPS off';
@@ -1709,77 +1773,232 @@ class _ConfiguredParkMapScreenState extends State<ConfiguredParkMapScreen> {
     );
   }
 
-  Widget _directionsPanel(
-    WalkingRoute route, {
+  Widget _directionsPanel({
+    ParkDiscoveryItem? item,
+    WalkingRoute? route,
     ScrollController? scrollController,
   }) {
-    final distance = _formatDistance(route.distanceMeters);
-    final minutes = (route.durationSeconds / 60).ceil();
+    final externalUrl = item == null ? null : _effectiveDirectionsUrl(item);
+    final cmsNote = item?.directionsNote?.trim() ?? '';
+    final distance = route == null ? null : _formatDistance(route.distanceMeters);
+    final minutes = route == null ? null : (route.durationSeconds / 60).ceil();
+
     return ListView(
       controller: scrollController,
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 18),
+      padding: const EdgeInsets.fromLTRB(14, 2, 14, 20),
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(14),
+          margin: const EdgeInsets.only(bottom: 10),
           decoration: BoxDecoration(
-            color: const Color(0xFFE8F0FE),
-            borderRadius: BorderRadius.circular(14),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [wonderlaNavy, wonderlaCobalt],
+            ),
+            borderRadius: BorderRadius.circular(18),
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                route.mode == RouteMode.walking
-                    ? Icons.directions_walk_rounded
-                    : Icons.directions_car_rounded,
-                color: _mapNavy,
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: wonderlaGold,
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Icon(
+                      item?.icon ?? Icons.directions_rounded,
+                      color: wonderlaNavy,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'DIRECTIONS TO',
+                          style: TextStyle(
+                            color: wonderlaGold,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        Text(
+                          item?.name ?? 'Destination',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 15.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Clear directions',
+                    onPressed: () => setState(() {
+                      _route = null;
+                      _activeDirectionsItem = null;
+                      _selected = null;
+                      _routeError = null;
+                    }),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '$distance · about $minutes min ${route.mode == RouteMode.walking ? 'walk' : 'drive'}',
-                  style: const TextStyle(
-                    color: _mapInk,
-                    fontWeight: FontWeight.w800,
+              if (cmsNote.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(11),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.signpost_outlined,
+                        color: wonderlaGold,
+                        size: 17,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          cmsNote,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            height: 1.4,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: 'Clear directions',
-                onPressed: () => setState(() {
-                  _route = null;
-                  _selected = null;
-                  _routeError = null;
-                }),
-                icon: const Icon(Icons.close_rounded, color: wonderlaNavy),
-              ),
+              ],
+              if (externalUrl != null && item != null) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: wonderlaGold,
+                      foregroundColor: wonderlaNavy,
+                      minimumSize: const Size(0, 42),
+                    ),
+                    onPressed: () => _openExternalDirections(item),
+                    icon: const Icon(Icons.open_in_new_rounded, size: 17),
+                    label: const Text('Open in Google Maps'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
-        for (var index = 0; index < route.steps.length; index++)
-          ListTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-            leading: CircleAvatar(
-              radius: 14,
-              backgroundColor: wonderlaCream,
-              child: Text(
-                '${index + 1}',
-                style: const TextStyle(
+        if (_routing)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: wonderlaCobalt,
+                  ),
+                ),
+                SizedBox(width: 10),
+                Text(
+                  'Finding walking path…',
+                  style: TextStyle(
+                    color: wonderlaMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (route != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8F0FE),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  route.mode == RouteMode.walking
+                      ? Icons.directions_walk_rounded
+                      : Icons.directions_car_rounded,
                   color: _mapNavy,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '$distance · about $minutes min ${route.mode == RouteMode.walking ? 'walk' : 'drive'}',
+                    style: const TextStyle(
+                      color: _mapInk,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          for (var index = 0; index < route.steps.length; index++)
+            ListTile(
+              dense: true,
+              visualDensity: VisualDensity.compact,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+              leading: CircleAvatar(
+                radius: 14,
+                backgroundColor: wonderlaCream,
+                child: Text(
+                  '${index + 1}',
+                  style: const TextStyle(
+                    color: _mapNavy,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
+              title: Text(
+                route.steps[index].instruction,
+                style: const TextStyle(fontSize: 13, color: _mapInk),
+              ),
+              trailing: Text(
+                _formatDistance(route.steps[index].distanceMeters),
+                style: const TextStyle(fontSize: 11, color: wonderlaMuted),
+              ),
             ),
-            title: Text(
-              route.steps[index].instruction,
-              style: const TextStyle(fontSize: 13, color: _mapInk),
+        ] else if (!_routing && cmsNote.isEmpty && externalUrl == null)
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: wonderlaCream,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: wonderlaBorder),
             ),
-            trailing: Text(
-              _formatDistance(route.steps[index].distanceMeters),
-              style: const TextStyle(fontSize: 11, color: wonderlaMuted),
+            child: const Text(
+              'Add a walking directions note, Google Maps link, or GPS coordinates for this place in Admin CMS to display step-by-step directions here.',
+              style: TextStyle(color: wonderlaMuted, fontSize: 12.5, height: 1.4),
             ),
           ),
       ],

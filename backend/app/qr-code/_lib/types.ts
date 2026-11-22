@@ -11,6 +11,9 @@ export interface MediaItem {
   description: string;
   tags?: string[]; // short category chips, e.g. ["Space Theme", "4K Clarity"]
   kioskBookingEnabled?: boolean;
+  minHeight?: string;
+  directions?: string;
+  directionsUrl?: string;
 }
 
 export interface EventItem extends MediaItem {
@@ -52,7 +55,10 @@ export interface DiningOutlet {
   name: string;
   cuisine: string;
   description?: string;   // shown on the outlet detail page
+  directions?: string;    // optional walking directions note entered in CMS
   directionsUrl?: string; // optional map/directions link
+  lat?: number;           // optional GPS latitude for in-app map route
+  lng?: number;           // optional GPS longitude for in-app map route
   tags?: string[];        // short category chips
   items: MenuItem[];
 }
@@ -77,6 +83,8 @@ export interface ParkMapPlace {
   /** Exact park coordinate used for walking navigation when available. */
   lat?: number;
   lng?: number;
+  directions?: string;
+  directionsUrl?: string;
   avatarImage?: string;
 }
 

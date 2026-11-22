@@ -536,41 +536,6 @@ Future<ParkFilterSelection?> showParkFilterSheet(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (catalog.hasIllustratedMap) ...[
-                            const _SheetSectionTitle('Map Style'),
-                            const SizedBox(height: 10),
-                            SegmentedButton<bool>(
-                              segments: const [
-                                ButtonSegment<bool>(
-                                  value: false,
-                                  icon: Icon(Icons.map_rounded, size: 18),
-                                  label: Text('Live GPS Map'),
-                                ),
-                                ButtonSegment<bool>(
-                                  value: true,
-                                  icon: Icon(Icons.explore_rounded, size: 18),
-                                  label: Text('Park Guide Map'),
-                                ),
-                              ],
-                              selected: {useIllustratedMap},
-                              onSelectionChanged: (selection) => setModalState(
-                                () => useIllustratedMap = selection.first,
-                              ),
-                              style: ButtonStyle(
-                                foregroundColor: WidgetStateProperty.resolveWith(
-                                  (states) => states.contains(WidgetState.selected)
-                                      ? Colors.white
-                                      : wonderlaNavy,
-                                ),
-                                backgroundColor: WidgetStateProperty.resolveWith(
-                                  (states) => states.contains(WidgetState.selected)
-                                      ? wonderlaCobalt
-                                      : wonderlaCream,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                          ],
                           const _SheetSectionTitle('Categories'),
                           const SizedBox(height: 10),
                           Wrap(

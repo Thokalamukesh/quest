@@ -336,7 +336,7 @@ void main() {
   });
 
   testWidgets(
-    'My Day Saved filter, Shortest wait sort, and Live GPS / Park Guide switcher work cleanly',
+    'My Day Saved filter and Shortest wait sort work cleanly without Live GPS / Park Guide buttons',
     (tester) async {
       SavedPlacesStore.instance.clearPark('bengaluru');
       addTearDown(() => SavedPlacesStore.instance.clearPark('bengaluru'));
@@ -359,9 +359,9 @@ void main() {
       );
       await tester.pump();
 
-      // Prominent Live GPS | Park Guide pill appears when map artwork is available.
-      expect(find.text('Live GPS'), findsOneWidget);
-      expect(find.text('Park Guide'), findsOneWidget);
+      // Live GPS & Park Guide switcher buttons are removed from the map.
+      expect(find.text('Live GPS'), findsNothing);
+      expect(find.text('Park Guide'), findsNothing);
 
       // Save Recoil via store -> Saved filter chip appears dynamically and filters to 1 place.
       SavedPlacesStore.instance.toggleSaved('bengaluru', 'Recoil');

@@ -289,6 +289,56 @@ class ParkPlaceDetailSheet extends StatelessWidget {
                             ),
                           ),
                         ],
+                        if (item.directionsNote != null &&
+                            item.directionsNote!.trim().isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEEF4FF),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFFC8DAFA),
+                              ),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(
+                                  Icons.directions_rounded,
+                                  color: wonderlaCobalt,
+                                  size: 21,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Park directions',
+                                        style: TextStyle(
+                                          color: wonderlaNavy,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        item.directionsNote!.trim(),
+                                        style: const TextStyle(
+                                          color: wonderlaNavy,
+                                          fontSize: 13,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 20),
                         _ActionButtons(
                           item: item,
@@ -888,8 +938,8 @@ class _ActionButtons extends StatelessWidget {
                       color: Colors.white,
                     ),
                   )
-                : const Icon(Icons.directions_walk_rounded, size: 19),
-            label: const Text('Walking Directions'),
+                : const Icon(Icons.directions_rounded, size: 19),
+            label: const Text('Get Directions'),
           )
         : onLocateOnMap != null
         ? FilledButton.icon(

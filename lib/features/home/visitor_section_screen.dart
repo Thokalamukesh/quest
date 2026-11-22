@@ -91,7 +91,13 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
-  void _openParkMap({String? focusPlaceName}) {
+  void _openParkMap({
+    String? focusPlaceName,
+    bool autoStartDirections = false,
+    Map<String, dynamic>? focusPlace,
+    String? directionsUrl,
+    String? directionsNote,
+  }) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ConfiguredParkMapScreen(
@@ -99,6 +105,10 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
           baseUrl: widget.api.baseUrl,
           api: widget.api,
           initialFocusPlaceName: focusPlaceName,
+          autoStartDirections: autoStartDirections,
+          initialFocusPlace: focusPlace,
+          initialDirectionsUrl: directionsUrl,
+          initialDirectionsNote: directionsNote,
         ),
       ),
     );
@@ -109,7 +119,13 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
       context,
       item: item,
       parkSlug: _parkSlug,
-      onLocateOnMap: () => _openParkMap(focusPlaceName: item.name),
+      onLocateOnMap: () => _openParkMap(
+        focusPlaceName: item.name,
+        autoStartDirections: true,
+        focusPlace: item.rawRide,
+        directionsUrl: item.directionsUrl,
+        directionsNote: item.directionsNote,
+      ),
     );
   }
 
@@ -761,6 +777,12 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                               InkWell(
                                 onTap: () => _openParkMap(
                                   focusPlaceName: outlet['name']?.toString(),
+                                  autoStartDirections: true,
+                                  focusPlace: outlet,
+                                  directionsUrl:
+                                      outlet['directionsUrl']?.toString(),
+                                  directionsNote:
+                                      outlet['directions']?.toString(),
                                 ),
                                 borderRadius: BorderRadius.circular(12),
                                 child: const Padding(
@@ -772,17 +794,17 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Icon(
-                                        Icons.map_outlined,
+                                        Icons.directions_rounded,
                                         size: 14,
-                                        color: wonderlaMuted,
+                                        color: wonderlaCobalt,
                                       ),
                                       SizedBox(width: 3),
                                       Text(
                                         'Map',
                                         style: TextStyle(
-                                          color: wonderlaMuted,
+                                          color: wonderlaCobalt,
                                           fontSize: 11.5,
-                                          fontWeight: FontWeight.w700,
+                                          fontWeight: FontWeight.w800,
                                         ),
                                       ),
                                     ],
@@ -823,8 +845,13 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
         context,
         outlet: outlet,
         resolveUrl: _url,
-        onLocateOnMap: () =>
-            _openParkMap(focusPlaceName: outlet['name']?.toString()),
+        onLocateOnMap: () => _openParkMap(
+          focusPlaceName: outlet['name']?.toString(),
+          autoStartDirections: true,
+          focusPlace: outlet,
+          directionsUrl: outlet['directionsUrl']?.toString(),
+          directionsNote: outlet['directions']?.toString(),
+        ),
       );
 
   List<Widget> _waitTimes() {
@@ -1062,7 +1089,10 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                           vertical: 6,
                         ),
                       ),
-                      onPressed: () => _openParkMap(focusPlaceName: title),
+                      onPressed: () => _openParkMap(
+                        focusPlaceName: title,
+                        autoStartDirections: true,
+                      ),
                       icon: const Icon(Icons.map_outlined, size: 15),
                       label: const Text(
                         'Map',
