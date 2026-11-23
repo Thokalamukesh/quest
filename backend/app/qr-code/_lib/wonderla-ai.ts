@@ -18,6 +18,9 @@ export interface AiChatHistoryItem {
 export interface AiSuggestedPlace {
   name: string;
   category: string;
+  imageUrl?: string;
+  subtitle?: string;
+  badge?: string;
   directions?: string;
   directionsUrl?: string;
   action: "directions" | "map";
@@ -123,11 +126,56 @@ function buildPlaceSuggestion(
   name: string,
   category: string,
   cfg: ParkConfig,
-  extra?: { directions?: string; directionsUrl?: string },
+  extra?: {
+    directions?: string;
+    directionsUrl?: string;
+    imageUrl?: string;
+    subtitle?: string;
+    badge?: string;
+  },
 ): AiSuggestedPlace {
+  const norm = normalize(name);
   const mapPlace = findMapPlace(cfg, name);
-  const dining = (cfg.dining ?? []).find((d) => normalize(d.name) === normalize(name));
-  const ride = (cfg.rides ?? []).find((r) => normalize(r.title) === normalize(name));
+  const dining = (cfg.dining ?? []).find((d) => normalize(d.name) === norm);
+  const ride = (cfg.rides ?? []).find((r) => normalize(r.title) === norm);
+  const wave = (cfg.waveRainDance ?? []).find((w) => normalize(w.title) === norm);
+  const event = (cfg.events ?? []).find((e) => normalize(e.title) === norm);
+  const waitMinutes = findWaitMinutes(cfg, name);
+
+  const imageUrl =
+    extra?.imageUrl?.trim() ||
+    ride?.img?.trim() ||
+    dining?.img?.trim() ||
+    wave?.img?.trim() ||
+    event?.img?.trim() ||
+    mapPlace?.avatarImage?.trim() ||
+    undefined;
+
+  const isPureVeg =
+    dining && (dining.items ?? []).length > 0 && (dining.items ?? []).every((i) => i.veg);
+
+  const badge =
+    extra?.badge?.trim() ||
+    (waitMinutes != null
+      ? `${waitMinutes} min wait`
+      : isPureVeg
+        ? "Pure Veg"
+        : wave?.timeSlot?.[0]
+          ? `Next · ${wave.timeSlot[0]}`
+          : event?.time
+            ? event.time
+            : category);
+
+  const subtitle =
+    extra?.subtitle?.trim() ||
+    dining?.cuisine?.trim() ||
+    ride?.description?.trim() ||
+    (wave?.timeSlot?.length ? `Sessions: ${wave.timeSlot.slice(0, 3).join(", ")}` : "") ||
+    event?.description?.trim() ||
+    dining?.directions?.trim() ||
+    mapPlace?.directions?.trim() ||
+    undefined;
+
   const directions =
     extra?.directions?.trim() ||
     mapPlace?.directions?.trim() ||
@@ -149,6 +197,9 @@ function buildPlaceSuggestion(
   return {
     name,
     category,
+    imageUrl,
+    subtitle,
+    badge,
     directions,
     directionsUrl,
     action: hasDir ? "directions" : "map",

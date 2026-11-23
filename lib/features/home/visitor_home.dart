@@ -415,10 +415,6 @@ class _VisitorHomeState extends State<VisitorHome> {
     if (_park == null) return _directory();
     final cfg = _park!;
     final compactHome = MediaQuery.sizeOf(context).width < 390;
-    final parkName = cfg['name']?.toString() ?? 'Wonderla';
-    final heroTitle = parkName.toLowerCase().contains('wonderla')
-        ? parkName
-        : 'Wonderla $parkName';
     return Scaffold(
       backgroundColor: _pale,
       floatingActionButton: WonderlaAiFab(
@@ -446,8 +442,6 @@ class _VisitorHomeState extends State<VisitorHome> {
                             right: 0,
                             height: heroHeight,
                             child: _HeroCard(
-                              name: heroTitle,
-                              location: cfg['location']?.toString() ?? '',
                               imageUrl: _imageUrl(
                                 cfg['heroImageUrl']?.toString(),
                               ),
@@ -980,18 +974,17 @@ class _VisitorHomeState extends State<VisitorHome> {
 
 class _HeroCard extends StatelessWidget {
   const _HeroCard({
-    required this.name,
-    required this.location,
     required this.imageUrl,
     required this.videoUrl,
   });
-  final String name, location, imageUrl, videoUrl;
+  final String imageUrl, videoUrl;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 560;
       final cardHeight = compact ? 320.0 : 360.0;
+      final headlineSize = compact ? 29.0 : 40.0;
       return Container(
         height: cardHeight,
         width: double.infinity,
@@ -1026,103 +1019,42 @@ class _HeroCard extends StatelessWidget {
                 errorBuilder: (_, _, _) => const SizedBox(),
               ),
             if (videoUrl.isNotEmpty) _HeroVideoBackground(url: videoUrl),
-            // Keep the top and center of the park photo clear and bright while
-            // anchoring crisp contrast behind the bottom title overlay.
+            // Soft cinematic scrim so the golden headline pops cleanly while
+            // keeping the park photo vivid and clear.
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  stops: [0.0, 0.36, 0.70, 1.0],
+                  stops: [0.0, 0.45, 1.0],
                   colors: [
-                    Color(0x1E071a3d),
-                    Color(0x00071a3d),
-                    Color(0x88071a3d),
-                    Color(0xE0071a3d),
+                    Color(0x42071A3D),
+                    Color(0x52071A3D),
+                    Color(0xAA071A3D),
                   ],
                 ),
               ),
             ),
             Positioned(
-              left: compact ? 20 : 30,
-              right: compact ? 20 : 30,
-              bottom: compact ? 74 : 78,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (location.isNotEmpty) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4.5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0x66071A3D),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.28),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.location_on_rounded,
-                            color: wonderlaGold,
-                            size: 13.5,
-                          ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              location,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.15,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+              left: compact ? 16 : 28,
+              right: compact ? 16 : 28,
+              top: 12,
+              bottom: 62,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _HeroGoldHeadlineLine(
+                      text: "INDIA'S LARGEST",
+                      fontSize: headlineSize,
                     ),
-                    const SizedBox(height: 9),
+                    SizedBox(height: compact ? 2 : 4),
+                    _HeroGoldHeadlineLine(
+                      text: 'AMUSEMENT PARK CHAIN!',
+                      fontSize: headlineSize,
+                    ),
                   ],
-                  Text(
-                    name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white,
-                      height: 1.08,
-                      fontSize: compact ? 27 : 33,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -.6,
-                      shadows: const [
-                        Shadow(
-                          color: Color(0x66071A3D),
-                          blurRadius: 14,
-                          offset: Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    'Rides · Live Waits · Dining · Park Map',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: .88),
-                      fontSize: compact ? 12.5 : 14,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.1,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           ],
@@ -1130,6 +1062,65 @@ class _HeroCard extends StatelessWidget {
       );
     },
   );
+}
+
+class _HeroGoldHeadlineLine extends StatelessWidget {
+  const _HeroGoldHeadlineLine({
+    required this.text,
+    required this.fontSize,
+  });
+
+  final String text;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = TextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.w900,
+      height: 1.08,
+      letterSpacing: 1.0,
+    );
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            style: baseStyle.copyWith(
+              foreground: Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 3.4
+                ..strokeJoin = StrokeJoin.round
+                ..color = const Color(0xFFFFEE4A),
+              shadows: const [
+                Shadow(
+                  color: Color(0x99FFE633),
+                  blurRadius: 14,
+                ),
+                Shadow(
+                  color: Color(0xA6071A3D),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            style: baseStyle.copyWith(
+              color: const Color(0xFFD9A908),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _HeroVideoBackground extends StatefulWidget {

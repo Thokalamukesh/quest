@@ -99,6 +99,7 @@ Future<void> showWonderlaAiAssistantSheet(
     backgroundColor: Colors.transparent,
     builder: (ctx) => _WonderlaAiAssistantSheet(
       parkConfig: parkConfig,
+      baseUrl: baseUrl,
       aiService: aiService ?? WonderlaAiService(baseUrl: baseUrl),
       onOpenPlaceOnMap: onOpenPlaceOnMap == null
           ? null
@@ -151,11 +152,13 @@ class _ChatBubbleModel {
 class _WonderlaAiAssistantSheet extends StatefulWidget {
   const _WonderlaAiAssistantSheet({
     required this.parkConfig,
+    required this.baseUrl,
     required this.aiService,
     this.onOpenPlaceOnMap,
   });
 
   final Map<String, dynamic> parkConfig;
+  final String baseUrl;
   final WonderlaAiService aiService;
   final ValueChanged<AiSuggestedPlace>? onOpenPlaceOnMap;
 
@@ -857,49 +860,13 @@ class _WonderlaAiAssistantSheetState extends State<_WonderlaAiAssistantSheet> {
                             ),
                           ],
                         ),
-                      if (msg.places.isNotEmpty &&
-                          widget.onOpenPlaceOnMap != null) ...[
+                      if (msg.places.isNotEmpty) ...[
                         const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 7,
-                          runSpacing: 7,
-                          children: [
-                            for (final place in msg.places)
-                              FilledButton.tonalIcon(
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: const Color(0xFFEEF4FF),
-                                  foregroundColor: wonderlaCobalt,
-                                  minimumSize: const Size(0, 36),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 11,
-                                    vertical: 6,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                    side: const BorderSide(
-                                      color: Color(0xFFC8DAFA),
-                                    ),
-                                  ),
-                                  textStyle: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                onPressed: () =>
-                                    widget.onOpenPlaceOnMap!(place),
-                                icon: Icon(
-                                  place.prefersDirections
-                                      ? Icons.directions_rounded
-                                      : Icons.map_outlined,
-                                  size: 15,
-                                ),
-                                label: Text(
-                                  place.prefersDirections
-                                      ? 'Directions · ${place.name}'
-                                      : 'Map · ${place.name}',
-                                ),
-                              ),
-                          ],
+                        _AiPlaceCardStrip(
+                          places: msg.places,
+                          parkConfig: widget.parkConfig,
+                          baseUrl: widget.baseUrl,
+                          onTapPlace: widget.onOpenPlaceOnMap,
                         ),
                       ],
                     ],
@@ -996,36 +963,459 @@ class _WonderlaAiAssistantSheetState extends State<_WonderlaAiAssistantSheet> {
   );
 }
 
+class _AiPlaceCardStrip extends StatelessWidget {
+  const _AiPlaceCardStrip({
+    required this.places,
+    required this.parkConfig,
+    required this.baseUrl,
+    this.onTapPlace,
+  });
+
+  final List<AiSuggestedPlace> places;
+  final Map<String, dynamic> parkConfig;
+  final String baseUrl;
+  final ValueChanged<AiSuggestedPlace>? onTapPlace;
+
+  String _resolveImageUrl(AiSuggestedPlace place) {
+    var raw = place.imageUrl?.trim() ?? '';
+    if (raw.isEmpty) {
+      raw = _findImageInConfig(place.name) ?? '';
+    }
+    if (raw.isEmpty) return '';
+    if (Uri.tryParse(raw)?.hasScheme == true) return raw;
+    final cleanBase = baseUrl.trim().replaceAll(RegExp(r'/$'), '');
+    if (cleanBase.isEmpty) return raw;
+    return '$cleanBase${raw.startsWith('/') ? '' : '/'}$raw';
+  }
+
+  String? _findImageInConfig(String placeName) {
+    final target = placeName.trim().toLowerCase();
+    if (target.isEmpty) return null;
+
+    String? searchList(dynamic raw, List<String> titleKeys, String imgKey) {
+      if (raw is! List) return null;
+      for (final item in raw.whereType<Map>()) {
+        final name = titleKeys
+            .map((k) => item[k]?.toString().trim() ?? '')
+            .firstWhere((v) => v.isNotEmpty, orElse: () => '');
+        if (name.toLowerCase() == target ||
+            name.toLowerCase().contains(target) ||
+            target.contains(name.toLowerCase())) {
+          final img = item[imgKey]?.toString().trim() ?? '';
+          if (img.isNotEmpty) return img;
+        }
+      }
+      return null;
+    }
+
+    return searchList(parkConfig['rides'], const ['title', 'name'], 'img') ??
+        searchList(parkConfig['dining'], const ['name', 'title'], 'img') ??
+        searchList(parkConfig['waveRainDance'], const ['title', 'name'], 'img') ??
+        searchList(parkConfig['events'], const ['title', 'name'], 'img') ??
+        searchList(
+          (parkConfig['parkMap'] as Map?)?['places'],
+          const ['name', 'title'],
+          'avatarImage',
+        );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (places.length == 1) {
+      final place = places.first;
+      return _AiPlaceCard(
+        place: place,
+        imageUrl: _resolveImageUrl(place),
+        onTap: onTapPlace == null ? null : () => onTapPlace!(place),
+      );
+    }
+
+    return SizedBox(
+      height: 222,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: places.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
+        itemBuilder: (_, index) {
+          final place = places[index];
+          return SizedBox(
+            width: 216,
+            child: _AiPlaceCard(
+              place: place,
+              imageUrl: _resolveImageUrl(place),
+              onTap: onTapPlace == null ? null : () => onTapPlace!(place),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _AiPlaceCard extends StatelessWidget {
+  const _AiPlaceCard({
+    required this.place,
+    required this.imageUrl,
+    this.onTap,
+  });
+
+  final AiSuggestedPlace place;
+  final String imageUrl;
+  final VoidCallback? onTap;
+
+  IconData _categoryIcon() {
+    final c = place.category.toLowerCase();
+    if (c.contains('dining') || c.contains('food') || c.contains('restaurant')) {
+      return Icons.restaurant_rounded;
+    }
+    if (c.contains('water') || c.contains('wave')) {
+      return Icons.waves_rounded;
+    }
+    if (c.contains('event') || c.contains('show')) {
+      return Icons.celebration_rounded;
+    }
+    if (c.contains('kid') || c.contains('family')) {
+      return Icons.child_care_rounded;
+    }
+    return Icons.attractions_rounded;
+  }
+
+  List<Color> _fallbackGradient() {
+    final c = place.category.toLowerCase();
+    if (c.contains('dining') || c.contains('food')) {
+      return const [Color(0xFF9A3412), Color(0xFFEA580C)];
+    }
+    if (c.contains('water') || c.contains('wave')) {
+      return const [Color(0xFF0369A1), Color(0xFF0EA5E9)];
+    }
+    return const [wonderlaNavy, wonderlaCobalt];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final badgeText = (place.badge?.trim().isNotEmpty == true)
+        ? place.badge!.trim()
+        : place.category;
+    final isPositiveBadge =
+        badgeText.toLowerCase().contains('wait') ||
+        badgeText.toLowerCase().contains('veg');
+    final subtitleText =
+        place.subtitle?.trim().isNotEmpty == true
+        ? place.subtitle!.trim()
+        : place.directions?.trim().isNotEmpty == true
+        ? place.directions!.trim()
+        : place.category;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFAFBFD),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: wonderlaBorder),
+        boxShadow: [
+          BoxShadow(
+            color: wonderlaNavy.withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: 104,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _imageFallback(),
+                if (imageUrl.isNotEmpty)
+                  Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => _imageFallback(),
+                  ),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x28071A3D),
+                        Color(0x00071A3D),
+                        Color(0x78071A3D),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 8,
+                  top: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3.5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isPositiveBadge
+                          ? const Color(0xEBECF9F2)
+                          : const Color(0xEB0F2357),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: isPositiveBadge
+                            ? const Color(0xFFBBE7CF)
+                            : wonderlaGold.withValues(alpha: 0.6),
+                      ),
+                    ),
+                    child: Text(
+                      badgeText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: isPositiveBadge ? wonderlaSuccess : wonderlaGold,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  place.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: wonderlaNavy,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitleText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: wonderlaMuted,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.25,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  height: 34,
+                  child: FilledButton.tonal(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFEEF4FF),
+                      foregroundColor: wonderlaCobalt,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: const BorderSide(color: Color(0xFFC8DAFA)),
+                      ),
+                    ),
+                    onPressed: onTap,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          place.prefersDirections
+                              ? Icons.directions_rounded
+                              : Icons.map_outlined,
+                          size: 15,
+                        ),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            place.prefersDirections
+                                ? 'Directions · ${place.name}'
+                                : 'Map · ${place.name}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _imageFallback() => DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: _fallbackGradient(),
+      ),
+    ),
+    child: Center(
+      child: Icon(
+        _categoryIcon(),
+        size: 36,
+        color: wonderlaGold.withValues(alpha: 0.92),
+      ),
+    ),
+  );
+}
+
 class _RichAiText extends StatelessWidget {
   const _RichAiText({required this.text});
 
   final String text;
 
+  List<TextSpan> _parseInline(String line, {bool isHeading = false}) {
+    final spans = <TextSpan>[];
+    final parts = line.split('**');
+    for (var i = 0; i < parts.length; i++) {
+      final segment = parts[i];
+      if (segment.isEmpty) continue;
+      if (i.isOdd) {
+        spans.add(
+          TextSpan(
+            text: segment,
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: wonderlaNavy,
+              fontSize: isHeading ? 14.3 : 13.8,
+            ),
+          ),
+        );
+      } else {
+        // Parse subtle *italic* phrases inside regular text cleanly.
+        final italicParts = segment.split('*');
+        for (var j = 0; j < italicParts.length; j++) {
+          if (italicParts[j].isEmpty) continue;
+          spans.add(
+            TextSpan(
+              text: italicParts[j],
+              style: TextStyle(
+                fontWeight: isHeading ? FontWeight.w800 : FontWeight.w500,
+                fontStyle: j.isOdd ? FontStyle.italic : FontStyle.normal,
+                color: wonderlaNavy,
+                fontSize: isHeading ? 14.3 : 13.8,
+              ),
+            ),
+          );
+        }
+      }
+    }
+    return spans;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final spans = <TextSpan>[];
-    final parts = text.split('**');
-    for (var i = 0; i < parts.length; i++) {
-      spans.add(
-        TextSpan(
-          text: parts[i],
-          style: TextStyle(
-            fontWeight: i.isOdd ? FontWeight.w800 : FontWeight.w500,
-            color: wonderlaNavy,
+    final rawLines = text.split('\n');
+    final blocks = <Widget>[];
+
+    for (var i = 0; i < rawLines.length; i++) {
+      final trimmed = rawLines[i].trim();
+      if (trimmed.isEmpty) continue;
+
+      final isBullet =
+          trimmed.startsWith('• ') ||
+          trimmed.startsWith('- ') ||
+          trimmed.startsWith('* ');
+      final isHeading =
+          !isBullet &&
+          trimmed.startsWith('**') &&
+          (trimmed.endsWith('**') || trimmed.endsWith(':**'));
+
+      if (isBullet) {
+        final content = trimmed.substring(2).trim();
+        blocks.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 5, left: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  margin: const EdgeInsets.only(top: 7.5, right: 8),
+                  decoration: const BoxDecoration(
+                    color: wonderlaCobalt,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      style: const TextStyle(
+                        fontFamily: 'Roboto',
+                        color: wonderlaNavy,
+                        fontSize: 13.8,
+                        height: 1.48,
+                      ),
+                      children: _parseInline(content),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
+        );
+      } else {
+        blocks.add(
+          Padding(
+            padding: EdgeInsets.only(
+              top: blocks.isEmpty ? 0 : (isHeading ? 10 : 6),
+            ),
+            child: Text.rich(
+              TextSpan(
+                style: TextStyle(
+                  fontFamily: 'Roboto',
+                  color: wonderlaNavy,
+                  fontSize: isHeading ? 14.3 : 13.8,
+                  fontWeight: isHeading ? FontWeight.w800 : FontWeight.w500,
+                  height: 1.5,
+                ),
+                children: _parseInline(trimmed, isHeading: isHeading),
+              ),
+            ),
+          ),
+        );
+      }
     }
-    return Text.rich(
-      TextSpan(
+
+    if (blocks.isEmpty) {
+      return Text(
+        text,
         style: const TextStyle(
           fontFamily: 'Roboto',
           color: wonderlaNavy,
           fontSize: 13.8,
-          height: 1.52,
+          height: 1.5,
         ),
-        children: spans,
-      ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: blocks,
     );
   }
 }

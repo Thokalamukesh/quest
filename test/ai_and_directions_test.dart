@@ -226,7 +226,7 @@ void main() {
         findsOneWidget,
       );
 
-      // Stream second chunk + place chip + completion
+      // Stream second chunk + visual place card + completion
       controller.add(
         const AiTextChunkEvent('Start with Kiddies Wheel (5 min wait).'),
       );
@@ -235,6 +235,8 @@ void main() {
           AiSuggestedPlace(
             name: 'Greens Restaurant',
             category: 'Dining',
+            subtitle: 'South Indian · Pure Veg',
+            badge: 'Pure Veg',
             directions: 'Next to Wave Pool',
             action: 'directions',
           ),
@@ -248,6 +250,8 @@ void main() {
         find.textContaining('Start with Kiddies Wheel (5 min wait).'),
         findsOneWidget,
       );
+      expect(find.text('Pure Veg'), findsOneWidget);
+      expect(find.text('South Indian · Pure Veg'), findsOneWidget);
       expect(find.text('Directions · Greens Restaurant'), findsOneWidget);
 
       await tester.tap(find.text('Directions · Greens Restaurant'));
@@ -295,7 +299,7 @@ void main() {
   });
 
   testWidgets(
-    'VisitorHome shows polished hero without change-park button or update popup',
+    'VisitorHome shows glowing INDIA\'S LARGEST AMUSEMENT PARK CHAIN! hero without park name or change-park button',
     (tester) async {
       tester.view.physicalSize = const Size(430, 860);
       tester.view.devicePixelRatio = 1.0;
@@ -309,8 +313,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Wonderla Bengaluru'), findsOneWidget);
-      expect(find.text('Bengaluru, Karnataka'), findsOneWidget);
+      expect(find.text("INDIA'S LARGEST"), findsWidgets);
+      expect(find.text('AMUSEMENT PARK CHAIN!'), findsWidgets);
+      expect(find.text('Wonderla Bengaluru'), findsNothing);
       expect(find.text('Parks'), findsNothing);
       expect(find.textContaining('Park guide updated'), findsNothing);
       expect(find.text('Ask Chiku'), findsOneWidget);

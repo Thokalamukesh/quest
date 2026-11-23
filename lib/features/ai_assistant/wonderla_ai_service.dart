@@ -9,6 +9,9 @@ class AiSuggestedPlace {
   const AiSuggestedPlace({
     required this.name,
     required this.category,
+    this.imageUrl,
+    this.subtitle,
+    this.badge,
     this.directions,
     this.directionsUrl,
     this.action = 'map',
@@ -16,6 +19,9 @@ class AiSuggestedPlace {
 
   final String name;
   final String category;
+  final String? imageUrl;
+  final String? subtitle;
+  final String? badge;
   final String? directions;
   final String? directionsUrl;
   final String action;
@@ -29,6 +35,9 @@ class AiSuggestedPlace {
       AiSuggestedPlace(
         name: json['name']?.toString() ?? '',
         category: json['category']?.toString() ?? 'Place',
+        imageUrl: json['imageUrl']?.toString(),
+        subtitle: json['subtitle']?.toString(),
+        badge: json['badge']?.toString(),
         directions: json['directions']?.toString(),
         directionsUrl: json['directionsUrl']?.toString(),
         action: json['action']?.toString() ?? 'map',
@@ -401,9 +410,13 @@ class WonderlaAiService {
       for (final r in matchingRides.take(3)) {
         final name = (r['title'] ?? r['name'] ?? '').toString();
         if (name.isNotEmpty) {
+          final w = r['_wait'] as int?;
           places[name.toLowerCase()] = AiSuggestedPlace(
             name: name,
             category: 'Ride',
+            imageUrl: r['img']?.toString(),
+            subtitle: r['description']?.toString(),
+            badge: w != null ? '$w min wait' : 'Ride',
             directions: r['directions']?.toString(),
             directionsUrl: r['directionsUrl']?.toString(),
             action: 'directions',
@@ -424,6 +437,30 @@ class WonderlaAiService {
         label: 'Checking live ride wait times…',
       );
       await Future<void>.delayed(const Duration(milliseconds: 70));
+      for (final w in sortedWaits.take(3)) {
+        final name = w['title']?.toString() ?? '';
+        if (name.isNotEmpty && !places.containsKey(name.toLowerCase())) {
+          final matchedRide = rides.firstWhere(
+            (r) =>
+                (r['title'] ?? r['name'] ?? '').toString().toLowerCase() ==
+                name.toLowerCase(),
+            orElse: () => const <String, dynamic>{},
+          );
+          places[name.toLowerCase()] = AiSuggestedPlace(
+            name: name,
+            category: 'Ride',
+            imageUrl:
+                w['img']?.toString().trim().isNotEmpty == true
+                ? w['img']?.toString()
+                : matchedRide['img']?.toString(),
+            subtitle: w['description']?.toString(),
+            badge: '${w['time']} min wait',
+            directions: matchedRide['directions']?.toString(),
+            directionsUrl: matchedRide['directionsUrl']?.toString(),
+            action: 'directions',
+          );
+        }
+      }
     }
 
     if (asksShows) {
@@ -432,6 +469,20 @@ class WonderlaAiService {
         label: 'Checking Wave Pool, Rain Disco & show timings…',
       );
       await Future<void>.delayed(const Duration(milliseconds: 60));
+      for (final w in waves.take(2)) {
+        final name = w['title']?.toString() ?? '';
+        if (name.isNotEmpty && !places.containsKey(name.toLowerCase())) {
+          final slots = (w['timeSlot'] as List? ?? const []).join(', ');
+          places[name.toLowerCase()] = AiSuggestedPlace(
+            name: name,
+            category: 'Water Ride',
+            imageUrl: w['img']?.toString(),
+            subtitle: slots.isNotEmpty ? 'Sessions: $slots' : 'Water session',
+            badge: 'Water Ride',
+            action: 'map',
+          );
+        }
+      }
     }
 
     final matchedDining = <Map<String, dynamic>>[];
@@ -452,9 +503,15 @@ class WonderlaAiService {
       for (final d in matchedDining.take(3)) {
         final name = d['name']?.toString() ?? '';
         if (name.isNotEmpty) {
+          final items = _mapList(d['items']);
+          final isPureVeg =
+              items.isNotEmpty && items.every((i) => i['veg'] == true);
           places[name.toLowerCase()] = AiSuggestedPlace(
             name: name,
             category: 'Dining',
+            imageUrl: d['img']?.toString(),
+            subtitle: d['cuisine']?.toString() ?? d['description']?.toString(),
+            badge: isPureVeg ? 'Pure Veg' : 'Dining',
             directions: d['directions']?.toString(),
             directionsUrl: d['directionsUrl']?.toString(),
             action: 'directions',
@@ -474,6 +531,9 @@ class WonderlaAiService {
           AiSuggestedPlace(
             name: d['name']?.toString() ?? '',
             category: 'Dining',
+            imageUrl: d['img']?.toString(),
+            subtitle: d['cuisine']?.toString() ?? d['directions']?.toString(),
+            badge: 'Dining',
             directions: d['directions']?.toString(),
             directionsUrl: d['directionsUrl']?.toString(),
             action: 'directions',
@@ -482,6 +542,9 @@ class WonderlaAiService {
           AiSuggestedPlace(
             name: p['name']?.toString() ?? '',
             category: p['category']?.toString() ?? 'Place',
+            imageUrl: p['avatarImage']?.toString(),
+            subtitle: p['directions']?.toString(),
+            badge: p['category']?.toString() ?? 'Place',
             directions: p['directions']?.toString(),
             directionsUrl: p['directionsUrl']?.toString(),
             action: 'directions',
