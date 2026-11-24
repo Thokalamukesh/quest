@@ -448,7 +448,108 @@ function pickVariant(seed: string, options: string[]): string {
   return options[hash % options.length];
 }
 
-function tryChikuBanterReply(cfg: ParkConfig, message: string): string | null {
+interface BanterResult {
+  text: string;
+  places?: AiSuggestedPlace[];
+}
+
+function parseHeightFromMessage(lower: string): { heightCm?: number; note?: string } {
+  const cmMatch = lower.match(/(\d{2,3})\s*(?:cm|centimeter)/i);
+  if (cmMatch) return { heightCm: Number(cmMatch[1]) };
+
+  const ftInchMatch = lower.match(/(\d)\s*(?:ft|foot|feet|')\s*(\d{1,2})?\s*(?:in|inch|")?/i);
+  if (ftInchMatch) {
+    const feet = Number(ftInchMatch[1]);
+    const inches = ftInchMatch[2] ? Number(ftInchMatch[2]) : 0;
+    if (feet >= 2 && feet <= 7) {
+      const cm = Math.round(feet * 30.48 + inches * 2.54);
+      return { heightCm: cm, note: `${feet} ft${inches ? ` ${inches} in` : ""} (~${cm} cm)` };
+    }
+  }
+
+  const decimalFtMatch = lower.match(/(\d\.\d)\s*(?:ft|foot|feet)/i);
+  if (decimalFtMatch) {
+    const feet = Number(decimalFtMatch[1]);
+    if (feet >= 2 && feet <= 7) {
+      const cm = Math.round(feet * 30.48);
+      return { heightCm: cm, note: `${feet} ft (~${cm} cm)` };
+    }
+  }
+
+  const ageMatch = lower.match(/(\d{1,2})\s*(?:yr|year|yrs|years)\s*old/i);
+  if (ageMatch) {
+    const age = Number(ageMatch[1]);
+    if (age >= 2 && age <= 12) {
+      const approx = Math.min(145, Math.max(85, 75 + age * 7));
+      return { heightCm: approx, note: `${age}-year-old (approx. ${approx} cm)` };
+    }
+  }
+  if (/(toddler|baby|infant|small kid|little kid)/.test(lower)) {
+    return { heightCm: 95, note: "little kid (~95 cm)" };
+  }
+  return {};
+}
+
+function findDirectParkMatches(cfg: ParkConfig, message: string) {
+  const normMsg = ` ${normalize(message)} `;
+  const tokens = normalize(message)
+    .split(" ")
+    .filter((t) => t.length >= 3 && !["the", "and", "for", "with", "what", "tell", "about", "show", "can", "you", "where", "how", "this", "that", "near", "park", "wonderla", "chiku", "chicku", "please", "give", "want", "best", "good", "from"].includes(t));
+
+  const matchedRides = (cfg.rides ?? []).filter((r) => {
+    const titleNorm = normalize(r.title);
+    if (!titleNorm) return false;
+    if (normMsg.includes(` ${titleNorm} `)) return true;
+    const titleWords = titleNorm.split(" ").filter((w) => w.length >= 4);
+    return titleWords.some((w) => tokens.includes(w));
+  });
+
+  const matchedDining = (cfg.dining ?? []).filter((d) => {
+    const nameNorm = normalize(d.name);
+    if (nameNorm && normMsg.includes(` ${nameNorm} `)) return true;
+    const dishHit = (d.items ?? []).some((i) => {
+      const dishNorm = normalize(i.name);
+      return (
+        (dishNorm.length >= 4 && normMsg.includes(` ${dishNorm} `)) ||
+        dishNorm.split(" ").some((w) => w.length >= 4 && tokens.includes(w))
+      );
+    });
+    const cuisineHit = normalize(d.cuisine)
+      .split(" ")
+      .some((w) => w.length >= 4 && tokens.includes(w));
+    const nameWordHit = nameNorm
+      .split(" ")
+      .filter((w) => w.length >= 4 && w !== "restaurant" && w !== "park" && w !== "food")
+      .some((w) => tokens.includes(w));
+    return dishHit || cuisineHit || nameWordHit;
+  });
+
+  const matchedWaves = (cfg.waveRainDance ?? []).filter((w) => {
+    const n = normalize(w.title);
+    return n && (normMsg.includes(` ${n} `) || n.split(" ").some((tw) => tw.length >= 4 && tokens.includes(tw)));
+  });
+
+  const matchedEvents = (cfg.events ?? []).filter((e) => {
+    const n = normalize(e.title);
+    return n && (normMsg.includes(` ${n} `) || n.split(" ").some((tw) => tw.length >= 4 && tokens.includes(tw)));
+  });
+
+  const matchedPlaces = (cfg.parkMap?.places ?? []).filter((p) => {
+    const n = normalize(p.name);
+    return (
+      n &&
+      (normMsg.includes(` ${n} `) ||
+        n
+          .split(" ")
+          .filter((w) => w.length >= 4 && w !== "park" && w !== "pool" && w !== "ride")
+          .some((w) => tokens.includes(w)))
+    );
+  });
+
+  return { matchedRides, matchedDining, matchedWaves, matchedEvents, matchedPlaces };
+}
+
+function tryChikuBanterReply(cfg: ParkConfig, message: string): BanterResult | null {
   const lower = message.toLowerCase().trim();
   const sampleDining = cfg.dining?.[0]?.name ?? "Park View Restaurant";
   const sampleThrill =
@@ -460,9 +561,18 @@ function tryChikuBanterReply(cfg: ParkConfig, message: string): string | null {
     cfg.rides?.find((r) => classifyRideCategory(r) === "water")?.title ??
     "Wave Pool";
 
+  const direct = findDirectParkMatches(cfg, message);
+  const mentionsDirectParkItem =
+    direct.matchedRides.length > 0 ||
+    direct.matchedDining.length > 0 ||
+    direct.matchedWaves.length > 0 ||
+    direct.matchedEvents.length > 0 ||
+    direct.matchedPlaces.length > 0;
+
   // Check if the visitor is actually asking for park recommendations/info
   const hasExplicitParkRequest =
-    /(plan|itinerary|schedule|next \d|suggest|recommend|wait|queue|shortest|ride|coaster|kid|child|height|\d{2,3}\s*cm|direction|map|route|how to reach|where is|where can i|menu|veg|non-veg|restaurant|dining|biryani|price|wave pool|rain disco|show|event|timing|ticket|locker|swimwear|safety|guideline|maintenance)/.test(
+    mentionsDirectParkItem ||
+    /(plan|itinerary|schedule|next \d|suggest|recommend|wait|queue|shortest|ride|coaster|kid|child|family|thrill|water|dry|land|height|\d{2,3}\s*cm|\d\s*ft|feet|year old|direction|map|route|how to reach|where is|where can i|menu|veg|non-veg|restaurant|dining|biryani|dosa|pizza|chaat|snack|price|wave pool|rain disco|show|event|timing|ticket|locker|swimwear|safety|guideline|maintenance|kiosk|book|washroom|restroom|toilet|first aid|parking|open|close|entry)/.test(
       lower,
     );
 
@@ -473,48 +583,83 @@ function tryChikuBanterReply(cfg: ParkConfig, message: string): string | null {
     ) && !/(where|best|suggest|recommend|veg|menu|restaurant|direction|map|near)/.test(lower);
 
   if (asksChikuPersonalMeal) {
-    return pickVariant(lower, [
-      `Haha, I tried sneaking a crispy dosa near **${sampleWater}**, got splashed by a giant wave, and now I'm running purely on **${sampleThrill}** adrenaline! 😄 If *you're* hungry though, **${sampleDining}** at **${cfg.name}** has great food — want veg or non-veg suggestions?`,
-      `I had two loops of **${sampleThrill}** for starters and a splash of **${sampleWater}** for dessert — mascot diet! 😂 Seriously though, if your tummy's rumbling, ask me for the best food or directions to **${sampleDining}** inside **${cfg.name}**!`,
-    ]);
+    return {
+      text: pickVariant(lower, [
+        `Haha, I tried sneaking a crispy dosa near **${sampleWater}**, got splashed by a giant wave, and now I'm running purely on **${sampleThrill}** adrenaline! 😄 If *you're* hungry though, **${sampleDining}** at **${cfg.name}** is super tasty — tap the card below for directions or ask me for veg / non-veg picks!`,
+        `I had two loops of **${sampleThrill}** for starters and a splash of **${sampleWater}** for dessert — mascot diet! 😂 If your tummy's rumbling, check out **${sampleDining}** below or ask me for veg / non-veg menus inside **${cfg.name}**!`,
+      ]),
+      places: [
+        buildPlaceSuggestion(sampleDining, "Dining", cfg),
+        buildPlaceSuggestion(sampleThrill, "Ride", cfg),
+      ],
+    };
   }
 
   if (hasExplicitParkRequest) return null;
 
   // Jokes / humor
   if (/(joke|make me laugh|funny|comedy|laugh)/.test(lower)) {
-    return pickVariant(lower, [
-      `Why did the roller coaster at **${cfg.name}** win Employee of the Month? Because it had way too many ups and downs and STILL never lost its track! 🎢😄 Want me to check which thrill ride has the shortest wait right now?`,
-      `Why did I bring sunglasses to the **${sampleWater}**? Because **${cfg.name}** rides are *way* too cool! 😎 Ready to plan your next rides or grab a bite at **${sampleDining}**?`,
-    ]);
+    return {
+      text: pickVariant(lower, [
+        `Why did the roller coaster at **${cfg.name}** win Employee of the Month? Because it had way too many ups and downs and STILL never lost its track! 🎢😄 Want to check live wait times or jump on **${sampleThrill}**?`,
+        `Why did I bring sunglasses to **${sampleWater}**? Because **${cfg.name}** rides are *way* too cool! 😎 Ready to plan your rides or grab a bite at **${sampleDining}**?`,
+      ]),
+      places: [buildPlaceSuggestion(sampleThrill, "Ride", cfg)],
+    };
   }
 
   // Love / marriage / relationship / silly personal questions
   if (/(marry|married|wife|husband|girlfriend|boyfriend|\bgf\b|\bbf\b|single|love you|kiss|date me)/.test(lower)) {
-    return `Haha, slow down! My mascot heart is already taken by **${sampleThrill}**, cotton candy, and the **${sampleWater}**! 🎢💛 Let's channel that energy into a super fun day at **${cfg.name}** — want a 3-hour ride plan?`;
+    return {
+      text: `Haha, slow down! My mascot heart is already taken by **${sampleThrill}**, cotton candy, and **${sampleWater}**! 🎢💛 Let's turn that energy into an unforgettable day at **${cfg.name}** — want a 3-hour ride plan?`,
+      places: [
+        buildPlaceSuggestion(sampleThrill, "Ride", cfg),
+        buildPlaceSuggestion(sampleWater, "Water Ride", cfg),
+      ],
+    };
   }
 
-  // Tired / sleepy / bored
-  if (/(tired|sleepy|bored|boring|exhausted|hot|sweating)/.test(lower)) {
-    return `Feeling low on battery at **${cfg.name}**? Two official Chiku prescriptions: cool off at **${sampleWater}** or wake right up on **${sampleThrill}**! ⚡ Want me to check live wait times or nearby snack spots?`;
+  // Tired / sleepy / bored / hot / weather
+  if (/(tired|sleepy|bored|boring|exhausted|hot|sweating|sunny|rainy|raining)/.test(lower)) {
+    return {
+      text: `Need a quick mood boost at **${cfg.name}**? Two official Chiku prescriptions: cool off at **${sampleWater}** or wake right up on **${sampleThrill}**! ⚡ You can also chill and recharge at **${sampleDining}** right below.`,
+      places: [
+        buildPlaceSuggestion(sampleWater, "Water Ride", cfg),
+        buildPlaceSuggestion(sampleDining, "Dining", cfg),
+      ],
+    };
   }
 
   // Identity / age / bot questions
   if (/(who are you|what is your name|your name|how old|your age|birthday|are you real|are you a bot|are you ai|where do you live|favorite ride|can you swim)/.test(lower)) {
-    return `I'm **Chiku**, **${cfg.name}**'s unofficial Chief Fun Officer! 🎢 I live somewhere between **${sampleThrill}** and **${sampleWater}**, and my superpower is knowing live wait times, kid-height rides, yummy park food, and map directions. What should we explore first?`;
+    return {
+      text: `I'm **Chiku**, **${cfg.name}**'s unofficial Chief Fun Officer! 🎢 I hang out between **${sampleThrill}** and **${sampleWater}**, and I know live wait times, kid-height rides, menus, safety rules, and map directions. What should we explore first?`,
+      places: [
+        buildPlaceSuggestion(sampleThrill, "Ride", cfg),
+        buildPlaceSuggestion(sampleWater, "Water Ride", cfg),
+      ],
+    };
   }
 
   // Thanks / compliments / goodbye
   if (/(thank|thx|awesome|super|nice|cute|good job|good boy|great|cool|bye|goodbye|see you|tata)/.test(lower)) {
-    return `Aww, you're making my mascot ears blush! 😄 Have an unforgettable, splash-filled day at **${cfg.name}** — tap **Ask Chiku** anytime you need rides, queues, food, or directions! 🎢✨`;
+    return {
+      text: `Aww, you're making my mascot ears blush! 😄 Have an unforgettable, splash-filled day at **${cfg.name}** — tap **Ask Chiku** anytime you need rides, queues, food, or directions! 🎢✨`,
+    };
   }
 
   // Greetings & how are you
   if (/^(hi+|hey+|hello+|hlo+|yo+|namaste|hola|sup|wassup|what'?s up|good morning|good afternoon|good evening|how are you|how r u|how are u|chiku|chicku)[\s!.,?]*((chiku|chicku|buddy|bro|friend|there|how are you|how r u)[\s!.,?]*)*$/.test(lower)) {
-    return pickVariant(lower, [
-      `Heyy! **Chiku** reporting live from **${cfg.name}** with 100% roller-coaster energy! 🎢 Ask me to plan your rides, filter by kid height (like **110 cm**), find short queues, or guide you to **${sampleDining}**!`,
-      `Hi there! I just survived a giant splash at **${sampleWater}** and I'm ready to be your **${cfg.name}** guide! 😄 Want thrill rides, family picks, live wait times, or tasty food directions?`,
-    ]);
+    return {
+      text: pickVariant(lower, [
+        `Heyy! **Chiku** reporting live from **${cfg.name}** with 100% roller-coaster energy! 🎢 Ask me about **any ride**, **kid height (like 110 cm)**, **shortest queues**, **veg/non-veg food**, or **map directions**!`,
+        `Hi there! I just survived a giant splash at **${sampleWater}** and I'm ready to be your **${cfg.name}** guide! 😄 Tap a highlight card below or ask me anything about the park!`,
+      ]),
+      places: [
+        buildPlaceSuggestion(sampleThrill, "Ride", cfg),
+        buildPlaceSuggestion(sampleDining, "Dining", cfg),
+      ],
+    };
   }
 
   return null;
@@ -527,46 +672,201 @@ async function runSmartToolFallback(
 ) {
   const banterReply = tryChikuBanterReply(cfg, message);
   if (banterReply) {
-    await emitChunksSlowly(banterReply, onEvent);
+    await emitChunksSlowly(banterReply.text, onEvent);
+    if (banterReply.places && banterReply.places.length > 0) {
+      onEvent({ type: "places", items: banterReply.places.slice(0, 4) });
+    }
     onEvent({ type: "done", mode: "smart_tools" });
     return;
   }
 
   const lower = message.toLowerCase();
   const suggestedPlaces = new Map<string, AiSuggestedPlace>();
+  const direct = findDirectParkMatches(cfg, message);
 
-  const heightMatch = lower.match(/(\d{2,3})\s*(?:cm|centimeter)/i);
-  const heightCm = heightMatch ? Number(heightMatch[1]) : undefined;
+  const { heightCm, note: heightNote } = parseHeightFromMessage(lower);
   const hoursMatch = lower.match(/(\d+)\s*(?:hr|hour)/i);
   const hours = hoursMatch ? Math.min(Math.max(Number(hoursMatch[1]), 1), 8) : undefined;
 
-  const asksPlan = /(plan|itinerary|today|schedule|next \d|suggest|recommend|start)/.test(lower);
-  const asksRides = /(ride|coaster|kid|child|thrill|water|height|cm)/.test(lower) || asksPlan;
-  const asksWait = /(wait|queue|crowd|shortest|fast|quick|busy)/.test(lower) || asksPlan;
-  const asksFood = /(food|eat|dining|restaurant|lunch|breakfast|dinner|veg|biryani|dosa|menu|snack|hungry)/.test(lower);
-  const asksMap = /(map|direction|where|locate|route|find|how to reach|how do i get|way to)/.test(lower);
-  const asksShows = /(wave|rain|show|event|parade|laser|timing|time)/.test(lower) || asksPlan;
-  const asksSafety = /(safe|height|rule|guideline|locker|swimwear|ticket|hygiene)/.test(lower) || heightCm != null;
+  const requestedCategory: "all" | "kids" | "family" | "water" | "thrill" =
+    /(thrill|scary|extreme|coaster|adrenaline|high thrill|adventure)/.test(lower)
+      ? "thrill"
+      : /(water|wet|splash|slide|swim|pool)/.test(lower)
+        ? "water"
+        : /(kid|child|children|toddler|baby|little)/.test(lower)
+          ? "kids"
+          : /(family|gentle|dry|land|everyone|all age)/.test(lower)
+            ? "family"
+            : "all";
+
+  const asksPlan = /(plan|itinerary|today|schedule|next \d|suggest|recommend|start|what to do|must do|top rides|best things)/.test(lower);
+  const asksRides =
+    direct.matchedRides.length > 0 ||
+    requestedCategory !== "all" ||
+    /(ride|coaster|attraction|kiosk|book|height|cm|ft|feet)/.test(lower) ||
+    asksPlan;
+  const asksWait = /(wait|queue|crowd|shortest|fast|quick|busy|less line|no line)/.test(lower) || asksPlan;
+  const asksFood =
+    direct.matchedDining.length > 0 ||
+    /(food|eat|dining|restaurant|lunch|breakfast|dinner|veg|non-veg|biryani|dosa|pizza|chaat|menu|snack|hungry|coffee|ice cream|meal|price)/.test(lower);
+  const asksMap =
+    direct.matchedPlaces.length > 0 ||
+    /(map|direction|where|locate|route|find|how to reach|how do i get|way to|washroom|restroom|toilet|first aid|parking|locker|entrance|exit)/.test(lower);
+  const asksShows =
+    direct.matchedWaves.length > 0 ||
+    direct.matchedEvents.length > 0 ||
+    /(wave|rain|show|event|parade|laser|timing|time)/.test(lower) ||
+    asksPlan;
+  const asksSafety =
+    /(safe|rule|guideline|locker|swimwear|dress|clothes|costume|ticket|hygiene|first aid|allow|bring|camera|phone|outside food)/.test(lower);
+  const asksMaintenance = /(maintenance|service|working|closed|open|operating|status)/.test(lower);
 
   const sections: string[] = [];
 
+  // 1. Direct specific entity lookup (e.g., "Tell me about Harakiri", "Chaat Galli menu?", "Wave Pool")
+  if (
+    !asksPlan &&
+    (direct.matchedRides.length > 0 ||
+      direct.matchedDining.length > 0 ||
+      direct.matchedWaves.length > 0 ||
+      direct.matchedEvents.length > 0 ||
+      direct.matchedPlaces.length > 0)
+  ) {
+    if (direct.matchedRides.length > 0) {
+      onEvent({
+        type: "status",
+        tool: "getParkRidesAndStatus",
+        label: `Looking up ${direct.matchedRides[0].title} details & live status…`,
+      });
+      await new Promise((r) => setTimeout(r, 90));
+      const lines = direct.matchedRides.slice(0, 3).map((ride) => {
+        const minCm = parseMinHeightCm(ride, cfg.rideGuidelines);
+        const wait = findWaitMinutes(cfg, ride.title);
+        const maint = findMaintenance(cfg, ride.title);
+        const cat = classifyRideCategory(ride);
+        suggestedPlaces.set(
+          normalize(ride.title),
+          buildPlaceSuggestion(ride.title, cat, cfg, {
+            directions: ride.directions,
+            directionsUrl: ride.directionsUrl,
+          }),
+        );
+        const details = [
+          `**${ride.title}** (${cat} ride · Operating)`,
+          wait != null ? `Live wait: **~${wait} min**` : null,
+          minCm != null ? `Min height: **${minCm} cm+**` : null,
+          ride.kioskBookingEnabled ? "Kiosk booking available" : null,
+          maint ? `Last safety check: ${maint.lastService}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return `• ${details}\n  ${ride.description}${ride.directions ? ` *Directions: ${ride.directions}*` : ""}`;
+      });
+      sections.push(`Here's what I found at **${cfg.name}**! 🎢\n${lines.join("\n")}`);
+    }
+
+    if (direct.matchedDining.length > 0) {
+      onEvent({
+        type: "status",
+        tool: "getDiningAndMenus",
+        label: `Checking ${direct.matchedDining[0].name} menu & directions…`,
+      });
+      await new Promise((r) => setTimeout(r, 90));
+      const lines = direct.matchedDining.slice(0, 3).map((d) => {
+        suggestedPlaces.set(
+          normalize(d.name),
+          buildPlaceSuggestion(d.name, "Dining", cfg, {
+            directions: d.directions,
+            directionsUrl: d.directionsUrl,
+          }),
+        );
+        const dishes = (d.items ?? [])
+          .slice(0, 4)
+          .map((i) => `${i.name} (${i.price}${i.veg ? " · Veg" : ""})`)
+          .join(", ");
+        return `• **${d.name}** (${d.cuisine})${dishes ? `\n  Popular picks: ${dishes}` : ""}${d.directions ? `\n  Directions: ${d.directions}` : ""}`;
+      });
+      sections.push(`**Yummy Match Found!** 🍽️\n${lines.join("\n")}`);
+    }
+
+    if (direct.matchedWaves.length > 0 || direct.matchedEvents.length > 0) {
+      onEvent({
+        type: "status",
+        tool: "getWaterAndEventSchedule",
+        label: "Checking live session & show timings…",
+      });
+      await new Promise((r) => setTimeout(r, 80));
+      const lines: string[] = [];
+      for (const w of direct.matchedWaves.slice(0, 2)) {
+        suggestedPlaces.set(normalize(w.title), buildPlaceSuggestion(w.title, "Water Ride", cfg));
+        lines.push(`• **${w.title}** (${w.rideDuration} min each): **${(w.timeSlot ?? []).join(", ")}**`);
+      }
+      for (const e of direct.matchedEvents.slice(0, 2)) {
+        suggestedPlaces.set(normalize(e.title), buildPlaceSuggestion(e.title, "Show", cfg));
+        lines.push(`• **${e.title}** at **${e.time}** — ${e.description}`);
+      }
+      sections.push(`**Timings & Details:**\n${lines.join("\n")}`);
+    }
+
+    if (direct.matchedPlaces.length > 0 && sections.length === 0) {
+      onEvent({
+        type: "status",
+        tool: "getParkMapAndDirections",
+        label: `Finding ${direct.matchedPlaces[0].name} on the park map…`,
+      });
+      await new Promise((r) => setTimeout(r, 80));
+      const lines = direct.matchedPlaces.slice(0, 3).map((p) => {
+        suggestedPlaces.set(
+          normalize(p.name),
+          buildPlaceSuggestion(p.name, p.category, cfg, {
+            directions: p.directions,
+            directionsUrl: p.directionsUrl,
+          }),
+        );
+        return `• **${p.name}** (${p.category})${p.directions ? ` — ${p.directions}` : ""}`;
+      });
+      sections.push(`**Found on the ${cfg.name} Map!** 🗺️\n${lines.join("\n")}\nTap any photo card below for step-by-step directions.`);
+    }
+
+    if (sections.length > 0) {
+      await emitChunksSlowly(sections.join("\n\n").trim(), onEvent);
+      if (suggestedPlaces.size > 0) {
+        onEvent({ type: "places", items: Array.from(suggestedPlaces.values()).slice(0, 4) });
+      }
+      onEvent({ type: "done", mode: "smart_tools" });
+      return;
+    }
+  }
+
+  // 2. General / Multi-tool park queries
   if (asksPlan) {
     sections.push(
-      `Let's plan your ${hours ? `next ${hours} hours` : "day"} at **${cfg.name}**! First, I'm checking available attractions, live operating status, and queue times.`,
+      `Let's plan your ${hours ? `next ${hours} hours` : "day"} at **${cfg.name}**! 🎢 First, I'm checking available rides, live queues, and water timings.`,
     );
   }
 
   let ridesData: ReturnType<typeof executeRidesTool> | null = null;
   if (asksRides) {
+    const kioskOnly = /(kiosk|book ride|booking)/.test(lower);
     onEvent({
       type: "status",
       tool: "getParkRidesAndStatus",
       label: heightCm
         ? `Checking rides safe for ${heightCm} cm & operating status…`
-        : "Checking available attractions & operating status…",
+        : requestedCategory !== "all"
+          ? `Finding top ${requestedCategory} rides & live waits…`
+          : "Checking available attractions & operating status…",
     });
-    await new Promise((r) => setTimeout(r, 120));
-    ridesData = executeRidesTool(cfg, { heightCm }, suggestedPlaces);
+    await new Promise((r) => setTimeout(r, 100));
+    ridesData = executeRidesTool(
+      cfg,
+      {
+        heightCm,
+        category: requestedCategory,
+        kioskOnly,
+      },
+      suggestedPlaces,
+    );
   }
 
   let waitData: ReturnType<typeof executeWaitTimesTool> | null = null;
@@ -576,7 +876,7 @@ async function runSmartToolFallback(
       tool: "getLiveWaitTimes",
       label: "Checking live ride wait times…",
     });
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 90));
     waitData = executeWaitTimesTool(cfg, {}, suggestedPlaces);
   }
 
@@ -587,13 +887,13 @@ async function runSmartToolFallback(
       tool: "getWaterAndEventSchedule",
       label: "Checking Wave Pool, Rain Disco & show timings…",
     });
-    await new Promise((r) => setTimeout(r, 90));
+    await new Promise((r) => setTimeout(r, 80));
     scheduleData = executeSchedulesTool(cfg, suggestedPlaces);
   }
 
   let diningData: ReturnType<typeof executeDiningTool> | null = null;
   if (asksFood) {
-    const vegOnly = /(pure veg|\bveg\b|vegetarian)/.test(lower);
+    const vegOnly = /(pure veg|\bveg\b|vegetarian)/.test(lower) && !/(non-veg|non veg|chicken|mutton)/.test(lower);
     onEvent({
       type: "status",
       tool: "getDiningAndMenus",
@@ -601,7 +901,7 @@ async function runSmartToolFallback(
         ? "Searching vegetarian restaurants & menus…"
         : "Checking park dining outlets & menus…",
     });
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 90));
     diningData = executeDiningTool(cfg, { vegOnly }, suggestedPlaces);
   }
 
@@ -612,44 +912,57 @@ async function runSmartToolFallback(
       tool: "getParkMapAndDirections",
       label: "Looking up park map pins & CMS directions…",
     });
-    await new Promise((r) => setTimeout(r, 100));
-    // Try to find a specific place name mentioned in the user message
+    await new Promise((r) => setTimeout(r, 90));
     const allNames = [
       ...(cfg.dining ?? []).map((d) => d.name),
       ...(cfg.rides ?? []).map((r) => r.title),
       ...(cfg.parkMap?.places ?? []).map((p) => p.name),
     ];
     const matchedName = allNames.find((n) => lower.includes(n.toLowerCase()));
+    const facilityCat = /(washroom|restroom|toilet)/.test(lower)
+      ? "restroom"
+      : /(locker)/.test(lower)
+        ? "locker"
+        : /(first aid|medical)/.test(lower)
+          ? "first aid"
+          : /(parking)/.test(lower)
+            ? "parking"
+            : asksFood
+              ? "dining"
+              : undefined;
     mapData = executeMapDirectionsTool(
       cfg,
-      { placeName: matchedName, category: asksFood ? "dining" : undefined },
+      { placeName: matchedName, category: facilityCat },
       suggestedPlaces,
     );
   }
 
-  if (asksSafety && !asksFood && !asksMap) {
+  let guidelinesData: ReturnType<typeof executeGuidelinesTool> | null = null;
+  if (asksSafety) {
     onEvent({
       type: "status",
       tool: "getSafetyAndGuidelines",
-      label: "Checking height rules & park guidelines…",
+      label: "Checking ride guidelines, safety & park rules…",
     });
     await new Promise((r) => setTimeout(r, 80));
-    executeGuidelinesTool(cfg);
+    guidelinesData = executeGuidelinesTool(cfg);
   }
 
-  if (ridesData && heightCm != null) {
-    const kidFriendly = ridesData.rides.slice(0, 6);
-    if (kidFriendly.length > 0) {
-      const list = kidFriendly
-        .map(
-          (r) =>
-            `• **${r.title}** (${r.category}${r.waitMinutes != null ? ` · ~${r.waitMinutes} min wait` : ""}) — ${r.description}`,
-        )
-        .join("\n");
-      sections.push(
-        `\n**Great rides for a ${heightCm} cm visitor** (${ridesData.matchingCount} matching attractions currently operating):\n${list}`,
-      );
-    }
+  // Format Ride Results (works for height queries, category queries like "water rides" / "thrill rides", OR general "rides" queries!)
+  if (ridesData && ridesData.rides.length > 0 && (heightCm != null || (!asksPlan && asksRides))) {
+    const picked = ridesData.rides.slice(0, 5);
+    const list = picked
+      .map(
+        (r) =>
+          `• **${r.title}** (${r.category}${r.waitMinutes != null ? ` · ~${r.waitMinutes} min wait` : ""}) — ${r.description}`,
+      )
+      .join("\n");
+    const heading = heightCm != null
+      ? `**Great rides for ${heightNote ?? `a ${heightCm} cm visitor`}** (${ridesData.matchingCount} operating):`
+      : requestedCategory !== "all"
+        ? `**Top ${requestedCategory.charAt(0).toUpperCase() + requestedCategory.slice(1)} Rides at ${cfg.name}:**`
+        : `**Popular Rides Operating at ${cfg.name}:**`;
+    sections.push(`${heading}\n${list}`);
   }
 
   if (asksPlan) {
@@ -679,7 +992,7 @@ async function runSmartToolFallback(
       );
     }
     if (planLines.length > 0) {
-      sections.push(`\n**Suggested ${slotCount}-Hour Game Plan:**\n${planLines.join("\n")}`);
+      sections.push(`**Suggested ${slotCount}-Hour Game Plan:**\n${planLines.join("\n")}`);
     }
   } else if (waitData && asksWait && !heightCm) {
     const topWaits = waitData.liveWaitTimes.slice(0, 5);
@@ -700,7 +1013,7 @@ async function runSmartToolFallback(
         return `• **${d.name}** (${d.cuisine})${sampleDishes ? ` — Try: ${sampleDishes}` : ""}${dirHint}`;
       })
       .join("\n");
-    sections.push(`\n**Dining Recommendations:**\n${outletsText}`);
+    sections.push(`**Dining Recommendations:**\n${outletsText}`);
   }
 
   if (mapData && mapData.places.length > 0) {
@@ -712,7 +1025,7 @@ async function runSmartToolFallback(
       )
       .join("\n");
     sections.push(
-      `\n**Map & Directions:**\n${placesText}\nTap any destination button below to open directions directly on the park map!`,
+      `**Map & Directions:**\n${placesText}\nTap any photo card below to open directions directly on the park map!`,
     );
   }
 
@@ -723,9 +1036,35 @@ async function runSmartToolFallback(
     const eventLines = scheduleData.events.map(
       (e) => `• **${e.title}** at **${e.time}** — ${e.description}`,
     );
-    sections.push(
-      `**Water Sessions & Shows at ${cfg.name}:**\n${[...waveLines, ...eventLines].join("\n")}`,
-    );
+    if (waveLines.length > 0 || eventLines.length > 0) {
+      sections.push(
+        `**Water Sessions & Shows at ${cfg.name}:**\n${[...waveLines, ...eventLines].join("\n")}`,
+      );
+    }
+  }
+
+  if (guidelinesData && asksSafety) {
+    const ruleLines = [
+      ...guidelinesData.rideGuidelines
+        .slice(0, 4)
+        .map((g) => `• **${g.title}**${g.minHeight ? ` (${g.minHeight})` : ""} — ${g.description}`),
+      ...guidelinesData.safetyHygiene
+        .slice(0, 3)
+        .map((s) => `• **${s.title}** — ${s.description}`),
+    ];
+    if (ruleLines.length > 0) {
+      sections.push(`**Park Rules, Safety & Guidelines:**\n${ruleLines.join("\n")}`);
+    }
+  }
+
+  if (asksMaintenance && (cfg.maintenanceLog ?? []).length > 0) {
+    const maintLines = (cfg.maintenanceLog ?? [])
+      .slice(0, 5)
+      .map((m) => `• **${m.ride}** — Last checked **${m.lastService}** (${m.checks})`);
+    sections.push(`**Ride Safety & Maintenance Checks:**\n${maintLines.join("\n")}`);
+    for (const m of (cfg.maintenanceLog ?? []).slice(0, 3)) {
+      suggestedPlaces.set(normalize(m.ride), buildPlaceSuggestion(m.ride, "Ride", cfg));
+    }
   }
 
   if (sections.length === 0) {
@@ -734,15 +1073,18 @@ async function runSmartToolFallback(
       cfg.rides?.[0]?.title ??
       "Recoil";
     const sampleDining = cfg.dining?.[0]?.name ?? "Park View Restaurant";
+    const sampleWater = cfg.waveRainDance?.[0]?.title ?? "Wave Pool";
+    suggestedPlaces.set(normalize(sampleThrill), buildPlaceSuggestion(sampleThrill, "Ride", cfg));
+    suggestedPlaces.set(normalize(sampleDining), buildPlaceSuggestion(sampleDining, "Dining", cfg));
     sections.push(
       pickVariant(lower, [
-        `Haha, you stumped me! My little mascot brain is 99% **${sampleThrill}** loops and 1% Wave Pool splashes — I only know **${cfg.name}** secrets! 🎢 Ask me to plan your rides, check live wait times, find kid-safe rides (like **110 cm**), or guide you to **${sampleDining}**!`,
-        `Whoa, that's way above my roller-coaster pay grade! 😄 I'm **Chiku**, and I only talk **${cfg.name}** — thrill rides, water splashes, shortest queues, yummy park food, and map directions. What shall we do next?`,
+        `Haha, you stumped me! My little mascot brain is 99% **${sampleThrill}** loops and 1% **${sampleWater}** splashes — I only know **${cfg.name}** secrets! 🎢 Ask me about any ride, kid heights, live waits, safety rules, or food like **${sampleDining}** below!`,
+        `Whoa, that's way above my roller-coaster pay grade! 😄 I'm **Chiku**, and I only talk **${cfg.name}** — thrill rides, water splashes, shortest queues, yummy park food, and map directions. Check out these park favourites below!`,
       ]),
     );
   }
 
-  await emitChunksSlowly(sections.join("\n").trim(), onEvent);
+  await emitChunksSlowly(sections.join("\n\n").trim(), onEvent);
 
   if (suggestedPlaces.size > 0) {
     onEvent({ type: "places", items: Array.from(suggestedPlaces.values()).slice(0, 4) });

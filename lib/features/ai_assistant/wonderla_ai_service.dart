@@ -561,7 +561,7 @@ class WonderlaAiService {
       }
     }
 
-    if (heightCm != null && matchingRides.isNotEmpty) {
+    if (matchingRides.isNotEmpty && (heightCm != null || (!asksPlan && asksRides))) {
       final list = matchingRides
           .take(5)
           .map((r) {
@@ -571,9 +571,10 @@ class WonderlaAiService {
             return '• **$title**${w != null ? ' (~$w min wait)' : ''} — $desc';
           })
           .join('\n');
-      parts.add(
-        '\n**Rides suitable for $heightCm cm** (${matchingRides.length} operating):\n$list',
-      );
+      final heading = heightCm != null
+          ? '**Rides suitable for $heightCm cm** (${matchingRides.length} operating):'
+          : '**Top Rides Operating at $parkName:**';
+      parts.add('\n$heading\n$list');
     }
 
     if (asksPlan) {
@@ -641,19 +642,116 @@ class WonderlaAiService {
       parts.add('**Timings & Shows:**\n${lines.join('\n')}');
     }
 
+    final asksSafety = RegExp(
+      r'(safe|rule|guideline|locker|swimwear|dress|costume|ticket|hygiene|outside food|camera|phone)',
+    ).hasMatch(lower);
+    if (asksSafety) {
+      final guidelines = _mapList(parkConfig['rideGuidelines']);
+      final safety = _mapList(parkConfig['safetyHygiene']);
+      final lines = [
+        for (final g in guidelines.take(4))
+          '• **${g['title']}**${g['minHeight'] != null ? ' (${g['minHeight']})' : ''} — ${g['description'] ?? ''}',
+        for (final s in safety.take(3))
+          '• **${s['title']}** — ${s['description'] ?? ''}',
+      ];
+      if (lines.isNotEmpty) {
+        parts.add('**Park Rules & Safety Guidelines:**\n${lines.join('\n')}');
+      }
+    }
+
     if (asksMap && places.isNotEmpty) {
       parts.add(
-        '\n**Directions Ready:** Tap any destination chip below to open directions directly on the map.',
+        '\n**Directions Ready:** Tap any photo card below to open directions directly on the map.',
       );
     }
 
     if (parts.isEmpty) {
-      parts.add(
-        _pickVariant(lower, [
-          "Haha, you stumped me! My little mascot brain is 99% roller-coaster loops and 1% Wave Pool splashes — I only know **$parkName** secrets! 🎢 Ask me to plan your rides, check live wait times, find kid-safe rides (like **110 cm**), or guide you to park restaurants!",
-          "Whoa, that's way above my roller-coaster pay grade! 😄 I'm **Chiku**, and I only talk **$parkName** — thrill rides, water splashes, shortest queues, yummy park food, and map directions. What shall we do next?",
-        ]),
-      );
+      // Check if visitor mentioned a specific ride or restaurant by name
+      final directRides = rides
+          .where((r) {
+            final t = (r['title'] ?? r['name'] ?? '').toString().toLowerCase();
+            return t.length >= 3 && lower.contains(t);
+          })
+          .toList();
+      final directDining = dining
+          .where((d) {
+            final n = (d['name'] ?? '').toString().toLowerCase();
+            return n.length >= 3 && lower.contains(n);
+          })
+          .toList();
+
+      if (directRides.isNotEmpty) {
+        final r = directRides.first;
+        final title = (r['title'] ?? r['name'] ?? '').toString();
+        final w = _findWait(waits, title);
+        final minCm = _estimateMinHeightCm(r);
+        places[title.toLowerCase()] = AiSuggestedPlace(
+          name: title,
+          category: 'Ride',
+          imageUrl: r['img']?.toString(),
+          subtitle: r['description']?.toString(),
+          badge: w != null ? '$w min wait' : 'Min $minCm cm',
+          directions: r['directions']?.toString(),
+          directionsUrl: r['directionsUrl']?.toString(),
+          action: 'directions',
+        );
+        parts.add(
+          "Here's **$title** at **$parkName**! 🎢\n• **Status:** Operating · Min height **$minCm cm+**${w != null ? ' · Live wait **~$w min**' : ''}\n• ${r['description'] ?? ''}",
+        );
+      } else if (directDining.isNotEmpty) {
+        final d = directDining.first;
+        final name = d['name']?.toString() ?? '';
+        places[name.toLowerCase()] = AiSuggestedPlace(
+          name: name,
+          category: 'Dining',
+          imageUrl: d['img']?.toString(),
+          subtitle: d['cuisine']?.toString(),
+          badge: 'Dining',
+          directions: d['directions']?.toString(),
+          directionsUrl: d['directionsUrl']?.toString(),
+          action: 'directions',
+        );
+        parts.add(
+          "**$name** (${d['cuisine'] ?? 'Dining'}) at **$parkName**! 🍽️\n• ${d['description'] ?? d['directions'] ?? 'Great food spot inside the park.'}",
+        );
+      } else {
+        if (rides.isNotEmpty) {
+          final r = rides.first;
+          final title = (r['title'] ?? r['name'] ?? '').toString();
+          if (title.isNotEmpty) {
+            places[title.toLowerCase()] = AiSuggestedPlace(
+              name: title,
+              category: 'Ride',
+              imageUrl: r['img']?.toString(),
+              subtitle: r['description']?.toString(),
+              badge: 'Popular Ride',
+              action: 'directions',
+            );
+          }
+        }
+        if (dining.isNotEmpty) {
+          final d = dining.first;
+          final name = d['name']?.toString() ?? '';
+          if (name.isNotEmpty) {
+            places[name.toLowerCase()] = AiSuggestedPlace(
+              name: name,
+              category: 'Dining',
+              imageUrl: d['img']?.toString(),
+              subtitle: d['cuisine']?.toString(),
+              badge: 'Dining',
+              directions: d['directions']?.toString(),
+              directionsUrl: d['directionsUrl']?.toString(),
+              action: 'directions',
+            );
+          }
+        }
+        parts.add(
+          _pickVariant(lower, [
+            "Haha, you stumped me! My little mascot brain is 99% roller-coaster loops and 1% Wave Pool splashes — I only know **$parkName** secrets! 🎢 Ask me about any ride, kid heights, live waits, safety rules, or food below!",
+            "Whoa, that's way above my roller-coaster pay grade! 😄 I'm **Chiku**, and I only talk **$parkName** — thrill rides, water splashes, shortest queues, yummy park food, and map directions. Check out these park favourites below!",
+          ]),
+        );
+      }
     }
 
     final fullText = parts.join('\n').trim();

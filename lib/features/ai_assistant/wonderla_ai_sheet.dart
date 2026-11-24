@@ -402,6 +402,8 @@ class _WonderlaAiAssistantSheetState extends State<_WonderlaAiAssistantSheet> {
                       children: [
                         for (final msg in _messages) _messageTile(msg),
                         if (_messages.length == 1) _quickPromptCards(),
+                        if (_messages.length > 1 && !_streaming)
+                          _followUpChips(),
                       ],
                     ),
                   ),
@@ -410,6 +412,60 @@ class _WonderlaAiAssistantSheetState extends State<_WonderlaAiAssistantSheet> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _followUpChips() {
+    const suggestions = [
+      ('Water rides', Icons.waves_rounded),
+      ('Thrill rides', Icons.roller_skating_rounded),
+      ('Veg food & menu', Icons.restaurant_rounded),
+      ('Safety & swimwear', Icons.verified_user_outlined),
+      ('Shortest waits', Icons.bolt_rounded),
+      ('Wave pool timings', Icons.schedule_rounded),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 2, bottom: 8, left: 42),
+      child: SizedBox(
+        height: 36,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: suggestions.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 8),
+          itemBuilder: (_, index) {
+            final (label, icon) = suggestions[index];
+            return Material(
+              color: wonderlaWhite,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+                side: const BorderSide(color: wonderlaBorder),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () => _send(label),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 11),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: 14, color: wonderlaCobalt),
+                      const SizedBox(width: 5),
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          color: wonderlaNavy,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -1031,7 +1087,7 @@ class _AiPlaceCardStrip extends StatelessWidget {
     }
 
     return SizedBox(
-      height: 222,
+      height: 244,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: places.length,
@@ -1039,7 +1095,7 @@ class _AiPlaceCardStrip extends StatelessWidget {
         itemBuilder: (_, index) {
           final place = places[index];
           return SizedBox(
-            width: 216,
+            width: 224,
             child: _AiPlaceCard(
               place: place,
               imageUrl: _resolveImageUrl(place),
@@ -1120,145 +1176,153 @@ class _AiPlaceCard extends StatelessWidget {
         ],
       ),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            height: 104,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                _imageFallback(),
-                if (imageUrl.isNotEmpty)
-                  Image.network(
-                    imageUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => _imageFallback(),
-                  ),
-                const DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Color(0x28071A3D),
-                        Color(0x00071A3D),
-                        Color(0x78071A3D),
-                      ],
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: 8,
-                  top: 8,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3.5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isPositiveBadge
-                          ? const Color(0xEBECF9F2)
-                          : const Color(0xEB0F2357),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: isPositiveBadge
-                            ? const Color(0xFFBBE7CF)
-                            : wonderlaGold.withValues(alpha: 0.6),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: 114,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _imageFallback(),
+                    if (imageUrl.isNotEmpty)
+                      Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => _imageFallback(),
                       ),
-                    ),
-                    child: Text(
-                      badgeText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: isPositiveBadge ? wonderlaSuccess : wonderlaGold,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  place.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: wonderlaNavy,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  subtitleText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: wonderlaMuted,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    height: 1.25,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  height: 34,
-                  child: FilledButton.tonal(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFEEF4FF),
-                      foregroundColor: wonderlaCobalt,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: const BorderSide(color: Color(0xFFC8DAFA)),
-                      ),
-                    ),
-                    onPressed: onTap,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          place.prefersDirections
-                              ? Icons.directions_rounded
-                              : Icons.map_outlined,
-                          size: 15,
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Color(0x28071A3D),
+                            Color(0x00071A3D),
+                            Color(0x82071A3D),
+                          ],
                         ),
-                        const SizedBox(width: 5),
-                        Flexible(
-                          child: Text(
-                            place.prefersDirections
-                                ? 'Directions · ${place.name}'
-                                : 'Map · ${place.name}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w800,
-                            ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 8,
+                      top: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isPositiveBadge
+                              ? const Color(0xEBECF9F2)
+                              : const Color(0xEB0F2357),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: isPositiveBadge
+                                ? const Color(0xFFBBE7CF)
+                                : wonderlaGold.withValues(alpha: 0.6),
                           ),
                         ),
-                      ],
+                        child: Text(
+                          badgeText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: isPositiveBadge
+                                ? wonderlaSuccess
+                                : wonderlaGold,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      place.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: wonderlaNavy,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitleText,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: wonderlaMuted,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        height: 1.28,
+                      ),
+                    ),
+                    const SizedBox(height: 9),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 34,
+                      child: FilledButton.tonal(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFFEEF4FF),
+                          foregroundColor: wonderlaCobalt,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: const BorderSide(color: Color(0xFFC8DAFA)),
+                          ),
+                        ),
+                        onPressed: onTap,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              place.prefersDirections
+                                  ? Icons.directions_rounded
+                                  : Icons.map_outlined,
+                              size: 15,
+                            ),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                place.prefersDirections
+                                    ? 'Directions · ${place.name}'
+                                    : 'Map · ${place.name}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

@@ -321,4 +321,27 @@ void main() {
       expect(find.text('Ask Chiku'), findsOneWidget);
     },
   );
+
+  test('Chiku answers random Wonderla questions with helpful text and visual place cards', () async {
+    final service = WonderlaAiService(baseUrl: '');
+    final park = _parkWithCmsDirections();
+
+    final events = await service
+        .ask(
+          parkSlug: 'bengaluru',
+          message: 'Tell me about Kiddies Wheel',
+          parkConfig: park,
+        )
+        .toList();
+
+    final fullText = events
+        .whereType<AiTextChunkEvent>()
+        .map((e) => e.text)
+        .join();
+    final placeEvents = events.whereType<AiPlacesEvent>().toList();
+
+    expect(fullText, contains('Kiddies Wheel'));
+    expect(placeEvents, isNotEmpty);
+    expect(placeEvents.first.places.first.name, 'Kiddies Wheel');
+  });
 }
