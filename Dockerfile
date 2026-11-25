@@ -10,15 +10,12 @@ RUN flutter pub get
 COPY lib ./lib
 COPY assets ./assets
 COPY web ./web
-RUN flutter build web --release --no-pub
+ARG API_BASE_URL
+RUN test -n "$API_BASE_URL" || (echo "Set API_BASE_URL to the Railway backend HTTPS origin." >&2; exit 1)
+RUN flutter build web --release --no-pub --dart-define="API_BASE_URL=$API_BASE_URL"
 
-FROM node:24-bookworm-slim
-WORKDIR /app
-COPY backend/package.json backend/package-lock.json ./
-RUN npm ci
-COPY backend/ ./
-COPY --from=flutter-build /app/build/web/ ./public/
-ENV SERVE_FLUTTER_WEB=1
-RUN npm run build
-ENV NODE_ENV=production
-CMD ["npm", "start"]
+FROM nginx:stable-alpine
+ENV PORT=8080
+ENV NGINX_ENVSUBST_FILTER="^PORT$"
+COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=flutter-build /app/build/web/ /usr/share/nginx/html/
