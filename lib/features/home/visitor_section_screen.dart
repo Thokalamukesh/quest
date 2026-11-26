@@ -482,6 +482,7 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                         style: const TextStyle(
                           color: wonderlaNavy,
                           fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
                           height: 1.35,
                         ),
                       ),
@@ -751,6 +752,7 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: wonderlaMuted,
+                              fontWeight: FontWeight.w700,
                               height: 1.35,
                               fontSize: 12.5,
                             ),
@@ -963,6 +965,7 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                       style: const TextStyle(
                         color: wonderlaMuted,
                         fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
                         height: 1.3,
                       ),
                     ),
@@ -1075,7 +1078,7 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                             style: const TextStyle(
                               color: wonderlaMuted,
                               fontSize: 12.5,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ],
@@ -1303,7 +1306,7 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                     style: const TextStyle(
                       color: _navy,
                       fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
@@ -1397,6 +1400,7 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                   style: const TextStyle(
                     color: wonderlaMuted,
                     fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
                     height: 1.4,
                   ),
                 ),
@@ -1482,6 +1486,7 @@ class _VisitorSectionScreenState extends State<VisitorSectionScreen> {
                   style: const TextStyle(
                     color: wonderlaMuted,
                     fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
                     height: 1.4,
                   ),
                 ),

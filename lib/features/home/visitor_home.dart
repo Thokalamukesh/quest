@@ -47,7 +47,23 @@ List<String> describeParkConfigChanges(
       changed.add(label);
     }
   }
-  const overviewKeys = ['name', 'location', 'heroImageUrl', 'homeShortcuts'];
+  const overviewKeys = [
+    'name',
+    'location',
+    'heroImageUrl',
+    'heroVideoUrl',
+    'homeShortcuts',
+    'homeCardLabels',
+    'exploreParkMapImageUrl',
+    'exploreRidesImageUrl',
+    'exploreEventsImageUrl',
+    'exploreDiningImageUrl',
+    'exploreWaitTimesImageUrl',
+    'exploreGuidelinesImageUrl',
+    'exploreWaveImageUrl',
+    'exploreSafetyImageUrl',
+    'exploreMaintenanceImageUrl',
+  ];
   if (changed.isEmpty &&
       overviewKeys.any((k) => jsonEncode(previous[k]) != jsonEncode(next[k]))) {
     changed.add('Park details');
@@ -559,108 +575,136 @@ class _VisitorHomeState extends State<VisitorHome> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (nextActivity != null)
-                Material(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () {
-                      final shortcut = nextActivity.isWaterActivity
-                          ? HomeShortcutCatalog.byKey('wavePool')
-                          : HomeShortcutCatalog.byKey('events');
-                      if (shortcut != null) _openSection(shortcut);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
+                Builder(
+                  builder: (context) {
+                    final rawActivityImage =
+                        (nextActivity.imageUrl?.trim().isNotEmpty == true)
+                        ? nextActivity.imageUrl
+                        : nextActivity.isWaterActivity
+                        ? cfg['exploreWaveImageUrl']?.toString()
+                        : cfg['exploreEventsImageUrl']?.toString();
+                    final activityImageUrl = _imageUrl(rawActivityImage);
+                    Widget fallbackIcon() => Container(
+                      width: 46,
+                      height: 46,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: wonderlaBorder),
+                        color: nextActivity.isWaterActivity
+                            ? const Color(0xFFE6F6FE)
+                            : const Color(0xFFFFF4D6),
+                        borderRadius: BorderRadius.circular(13),
                       ),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 42,
-                            height: 42,
-                            decoration: BoxDecoration(
-                              color: nextActivity.isWaterActivity
-                                  ? const Color(0xFFE6F6FE)
-                                  : const Color(0xFFFFF4D6),
-                              borderRadius: BorderRadius.circular(13),
-                            ),
-                            child: Icon(
-                              ParkScheduleHelper.iconFor(nextActivity),
-                              color: nextActivity.isWaterActivity
-                                  ? const Color(0xFF0284C7)
-                                  : wonderlaNavy,
-                              size: 22,
-                            ),
+                      child: Icon(
+                        ParkScheduleHelper.iconFor(nextActivity),
+                        color: nextActivity.isWaterActivity
+                            ? const Color(0xFF0284C7)
+                            : wonderlaNavy,
+                        size: 22,
+                      ),
+                    );
+                    return Material(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: () {
+                          final shortcut = nextActivity.isWaterActivity
+                              ? HomeShortcutCatalog.byKey('wavePool')
+                              : HomeShortcutCatalog.byKey('events');
+                          if (shortcut != null) _openSection(shortcut);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: wonderlaBorder),
+                          ),
+                          child: Row(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(13),
+                                child: SizedBox(
+                                  width: 46,
+                                  height: 46,
+                                  child: activityImageUrl.isNotEmpty
+                                      ? Image.network(
+                                          activityImageUrl,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, _, _) =>
+                                              fallbackIcon(),
+                                        )
+                                      : fallbackIcon(),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 7,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: wonderlaGold,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Text(
-                                        'UP NEXT',
-                                        style: TextStyle(
-                                          color: wonderlaNavy,
-                                          fontSize: 9.5,
-                                          fontWeight: FontWeight.w900,
-                                          letterSpacing: 0.4,
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 7,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: wonderlaGold,
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            'UP NEXT',
+                                            style: TextStyle(
+                                              color: wonderlaNavy,
+                                              fontSize: 9.5,
+                                              fontWeight: FontWeight.w900,
+                                              letterSpacing: 0.4,
+                                            ),
+                                          ),
                                         ),
-                                      ),
+                                        const SizedBox(width: 7),
+                                        Flexible(
+                                          child: Text(
+                                            '${nextActivity.timeLabel} · ${nextActivity.countdownLabel}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: wonderlaCobalt,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 7),
-                                    Flexible(
-                                      child: Text(
-                                        '${nextActivity.timeLabel} · ${nextActivity.countdownLabel}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: wonderlaCobalt,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                        ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      nextActivity.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: wonderlaNavy,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w900,
                                       ),
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  nextActivity.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: wonderlaNavy,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                              const Icon(
+                                Icons.chevron_right_rounded,
+                                color: wonderlaMuted,
+                              ),
+                            ],
                           ),
-                          const Icon(
-                            Icons.chevron_right_rounded,
-                            color: wonderlaMuted,
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               if (shortestWait != null || savedCount > 0) ...[
                 const SizedBox(height: 10),
@@ -728,7 +772,7 @@ class _VisitorHomeState extends State<VisitorHome> {
                 style: const TextStyle(
                   color: wonderlaNavy,
                   fontSize: 12,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ),
@@ -861,7 +905,7 @@ class _VisitorHomeState extends State<VisitorHome> {
                                             style: const TextStyle(
                                               color: wonderlaMuted,
                                               fontSize: 13,
-                                              fontWeight: FontWeight.w600,
+                                              fontWeight: FontWeight.w700,
                                             ),
                                           ),
                                         ),
@@ -1295,7 +1339,7 @@ class ShortcutCard extends StatelessWidget {
                               color: _navy,
                               fontSize: compact ? 12 : 14,
                               height: 1.04,
-                              fontWeight: FontWeight.w800,
+                              fontWeight: FontWeight.w900,
                             ),
                           ),
                         ],

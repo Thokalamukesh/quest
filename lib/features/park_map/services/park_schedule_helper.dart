@@ -9,6 +9,7 @@ class UpcomingParkActivity {
     required this.isWaterActivity,
     required this.minutesUntilStart,
     this.durationMinutes,
+    this.imageUrl,
   });
 
   final String title;
@@ -16,6 +17,7 @@ class UpcomingParkActivity {
   final bool isWaterActivity;
   final int minutesUntilStart;
   final int? durationMinutes;
+  final String? imageUrl;
 
   String get countdownLabel {
     if (minutesUntilStart <= 0) return 'Starting now';
@@ -51,6 +53,7 @@ abstract final class ParkScheduleHelper {
       for (final raw in events.whereType<Map>()) {
         final title = (raw['title'] ?? raw['name'] ?? '').toString().trim();
         final timeStr = raw['time']?.toString().trim() ?? '';
+        final imageUrl = (raw['img'] ?? raw['imageUrl'] ?? '').toString().trim();
         final parsed = parseTimeOfDayMinutes(timeStr);
         if (title.isEmpty || parsed == null) continue;
         candidates.add((
@@ -59,6 +62,7 @@ abstract final class ParkScheduleHelper {
             timeLabel: timeStr,
             isWaterActivity: false,
             minutesUntilStart: parsed - currentMinutes,
+            imageUrl: imageUrl.isEmpty ? null : imageUrl,
           ),
           slotMinutes: parsed,
         ));
@@ -70,6 +74,7 @@ abstract final class ParkScheduleHelper {
       for (final raw in waves.whereType<Map>()) {
         final title = (raw['title'] ?? raw['name'] ?? '').toString().trim();
         final slots = raw['timeSlot'];
+        final imageUrl = (raw['img'] ?? raw['imageUrl'] ?? '').toString().trim();
         final duration = raw['rideDuration'] is num
             ? (raw['rideDuration'] as num).round()
             : int.tryParse('${raw['rideDuration']}');
@@ -85,6 +90,7 @@ abstract final class ParkScheduleHelper {
               isWaterActivity: true,
               minutesUntilStart: parsed - currentMinutes,
               durationMinutes: duration,
+              imageUrl: imageUrl.isEmpty ? null : imageUrl,
             ),
             slotMinutes: parsed,
           ));
@@ -111,6 +117,7 @@ abstract final class ParkScheduleHelper {
       isWaterActivity: first.item.isWaterActivity,
       minutesUntilStart: (24 * 60 - currentMinutes) + first.slotMinutes,
       durationMinutes: first.item.durationMinutes,
+      imageUrl: first.item.imageUrl,
     );
   }
 

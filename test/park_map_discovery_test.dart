@@ -320,6 +320,8 @@ void main() {
 
   test('ParkScheduleHelper parses real schedules and shortest wait time', () {
     final config = _sampleParkConfig();
+    ((config['waveRainDance'] as List).first as Map)['img'] =
+        '/uploads/qr-code/bengaluru/wave-pool.jpg';
     final next = ParkScheduleHelper.nextActivity(
       config,
       now: DateTime(2026, 11, 20, 11, 45),
@@ -328,6 +330,7 @@ void main() {
     expect(next!.title, 'Wave Pool');
     expect(next.timeLabel, '12:00 PM');
     expect(next.countdownLabel, 'In 15 min');
+    expect(next.imageUrl, '/uploads/qr-code/bengaluru/wave-pool.jpg');
 
     final shortest = ParkScheduleHelper.shortestWait(config);
     expect(shortest, isNotNull);
@@ -378,11 +381,15 @@ void main() {
   );
 
   testWidgets(
-    'VisitorHome shows Up Next schedule highlight and Shortest wait pill from real data',
+    'VisitorHome shows Up Next schedule highlight with uploaded image and bold card text',
     (tester) async {
+      final config = _sampleParkConfig();
+      ((config['waveRainDance'] as List).first as Map)['img'] =
+          'https://example.com/wave-pool.jpg';
+
       await tester.pumpWidget(
         MaterialApp(
-          home: VisitorHome(initialPark: _sampleParkConfig()),
+          home: VisitorHome(initialPark: config),
         ),
       );
       await tester.pump();
@@ -391,6 +398,21 @@ void main() {
       expect(find.text('UP NEXT'), findsOneWidget);
       expect(find.text('Wave Pool'), findsOneWidget);
       expect(find.text('Shortest wait: Lazy River · 10m'), findsOneWidget);
+
+      final upNextImages = tester.widgetList<Image>(find.byType(Image)).where((
+        image,
+      ) {
+        final provider = image.image;
+        return provider is NetworkImage &&
+            provider.url == 'https://example.com/wave-pool.jpg';
+      });
+      expect(upNextImages, isNotEmpty);
+
+      final shortcutText = tester.widget<Text>(find.text('Park Map'));
+      expect(shortcutText.style?.fontWeight, FontWeight.w900);
+
+      final upNextTitle = tester.widget<Text>(find.text('Wave Pool'));
+      expect(upNextTitle.style?.fontWeight, FontWeight.w900);
     },
   );
 
